@@ -10,6 +10,7 @@ import com.usbdiskmanager.ui.screens.DashboardScreen
 import com.usbdiskmanager.ui.screens.DiskDetailScreen
 import com.usbdiskmanager.ui.screens.FileExplorerScreen
 import com.usbdiskmanager.ui.screens.LogsScreen
+import com.usbdiskmanager.ui.screens.SettingsScreen
 
 sealed class Screen(val route: String) {
     data object Dashboard : Screen("dashboard")
@@ -21,6 +22,7 @@ sealed class Screen(val route: String) {
             "files/$deviceId/${mountPoint.replace("/", "|")}"
     }
     data object Logs : Screen("logs")
+    data object Settings : Screen("settings")
 }
 
 @Composable
@@ -40,6 +42,9 @@ fun AppNavHost(
                 },
                 onLogsClick = {
                     navController.navigate(Screen.Logs.route)
+                },
+                onSettingsClick = {
+                    navController.navigate(Screen.Settings.route)
                 },
                 onRequestSafPermission = onRequestSafPermission
             )
@@ -78,6 +83,10 @@ fun AppNavHost(
 
         composable(Screen.Logs.route) {
             LogsScreen(onNavigateUp = { navController.popBackStack() })
+        }
+
+        composable(Screen.Settings.route) {
+            SettingsScreen(onNavigateUp = { navController.popBackStack() })
         }
     }
 }

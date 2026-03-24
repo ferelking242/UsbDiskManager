@@ -10,7 +10,7 @@ sealed class ShizukuState {
     /** Shizuku is installed but its service is not running. */
     object NotRunning : ShizukuState()
 
-    /** Shizuku is running but we haven't asked for permission yet. */
+    /** Shizuku is running but we have not asked for permission yet. */
     object PermissionNotRequested : ShizukuState()
 
     /** We requested permission but the user denied it. */
@@ -21,12 +21,13 @@ sealed class ShizukuState {
 
     val isReady: Boolean get() = this is Ready
 
+    /** English label used for logging and accessibility descriptions. */
     val displayLabel: String get() = when (this) {
-        is NotInstalled -> "Shizuku non installé"
-        is NotRunning -> "Shizuku non démarré"
-        is PermissionNotRequested -> "Permission Shizuku requise"
-        is PermissionDenied -> "Permission Shizuku refusée"
-        is Ready -> "Shizuku actif — accès privilégié"
+        is NotInstalled -> "Not installed"
+        is NotRunning -> "Not running"
+        is PermissionNotRequested -> "Permission required"
+        is PermissionDenied -> "Permission denied"
+        is Ready -> "Active - privileged access"
     }
 
     val isActionable: Boolean get() = when (this) {

@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">USB Disk Manager</string>
+
+    <string name="cancel">Cancelar</string>
+    <string name="close">Cerrar</string>
+    <string name="ok">OK</string>
+    <string name="retry">Reintentar</string>
+    <string name="refresh">Actualizar</string>
+    <string name="settings">Ajustes</string>
+    <string name="logs">Registros</string>
+    <string name="back">Atras</string>
+    <string name="loading">Cargando...</string>
+    <string name="yes">Si</string>
+    <string name="no">No</string>
+    <string name="open">Abrir</string>
+    <string name="install">Instalar</string>
+
+    <string name="dashboard_title">USB Disk Manager</string>
+    <string name="no_devices_found">Ningun dispositivo USB detectado</string>
+    <string name="no_devices_hint">Conecta una memoria USB via OTG\nluego presiona Actualizar</string>
+    <string name="device_mounted">Montado</string>
+    <string name="device_not_mounted">No montado</string>
+    <string name="action_mount">Montar</string>
+    <string name="action_eject">Expulsar</string>
+    <string name="action_details">Detalles</string>
+    <string name="storage_total">Total</string>
+    <string name="storage_used">Usado</string>
+    <string name="storage_free">Libre</string>
+    <string name="storage_type">Tipo</string>
+
+    <string name="shizuku_title">Shizuku — Acceso privilegiado</string>
+    <string name="shizuku_ready">Shizuku activo — acceso privilegiado</string>
+    <string name="shizuku_not_installed">Shizuku no instalado</string>
+    <string name="shizuku_not_running">Shizuku no iniciado</string>
+    <string name="shizuku_permission_required">Permiso Shizuku requerido</string>
+    <string name="shizuku_permission_denied">Permiso Shizuku denegado</string>
+    <string name="shizuku_grant">Autorizar</string>
+    <string name="shizuku_retry">Reintentar</string>
+    <string name="shizuku_detail_ready">NTFS/EXT4/formato/blkid desbloqueado</string>
+    <string name="shizuku_detail_permission_pending">Shizuku listo — toca para activar acceso privilegiado</string>
+    <string name="shizuku_detail_permission_denied">Permiso denegado — toca para solicitar de nuevo</string>
+    <string name="shizuku_detail_not_running">Iniciar via ADB: adb shell sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh</string>
+    <string name="shizuku_detail_not_installed">Instala Shizuku desde Play Store para desbloquear NTFS/EXT4/formato</string>
+    <string name="shizuku_open_app">Abrir Shizuku</string>
+    <string name="shizuku_install_playstore">Instalar desde Play Store</string>
+    <string name="shizuku_what_is">Que es Shizuku?</string>
+    <string name="shizuku_description">Shizuku permite que esta app ejecute comandos shell privilegiados (nivel ADB) sin root. Desbloquea: montar NTFS/EXT4, formatear, blkid, fdisk, y mas.</string>
+    <string name="shizuku_playstore_url">https://play.google.com/store/apps/details?id=moe.shizuku.privileged.api</string>
+
+    <string name="settings_title">Ajustes</string>
+    <string name="settings_language">Idioma</string>
+    <string name="settings_language_auto">Automatico (sistema)</string>
+    <string name="settings_language_en">Ingles</string>
+    <string name="settings_language_fr">Frances</string>
+    <string name="settings_language_es">Espanol</string>
+    <string name="settings_language_de">Aleman</string>
+    <string name="settings_language_pt">Portugues</string>
+    <string name="settings_section_general">General</string>
+    <string name="settings_section_shizuku">Shizuku — Acceso privilegiado</string>
+    <string name="settings_section_about">Acerca de</string>
+    <string name="settings_theme">Tema</string>
+    <string name="settings_theme_system">Predeterminado del sistema</string>
+    <string name="settings_theme_light">Claro</string>
+    <string name="settings_theme_dark">Oscuro</string>
+    <string name="settings_shizuku_status">Estado</string>
+    <string name="settings_shizuku_request_permission">Solicitar permiso</string>
+    <string name="settings_version">Version</string>
+    <string name="settings_about_description">USB Disk Manager — gestiona tus memorias USB/OTG directamente desde Android. Soporta FAT32, exFAT, NTFS, EXT4 y mas (con Shizuku).</string>
+
+    <string name="format_title">Formatear</string>
+    <string name="format_confirm_title">Formatear disco?</string>
+    <string name="format_confirm_message">Esto BORRARA PERMANENTEMENTE todos los datos del disco. Esta accion no se puede deshacer. Confirmar?</string>
+    <string name="format_confirm_button">Formatear ahora</string>
+    <string name="format_label_hint">Etiqueta del volumen (opcional)</string>
+
+    <string name="disk_detail_title">Detalles del disco</string>
+    <string name="disk_info">Informacion</string>
+    <string name="disk_serial">Serie</string>
+    <string name="disk_vendor">ID Fabricante</string>
+    <string name="disk_product">ID Producto</string>
+    <string name="disk_filesystem">Sistema de archivos</string>
+    <string name="disk_mount_point">Punto de montaje</string>
+    <string name="disk_operations">Operaciones</string>
+    <string name="disk_benchmark">Benchmark</string>
+    <string name="disk_explore_files">Explorar archivos</string>
+
+    <string name="benchmark_title">Benchmark</string>
+    <string name="benchmark_read">Velocidad lectura</string>
+    <string name="benchmark_write">Velocidad escritura</string>
+    <string name="benchmark_start">Iniciar benchmark</string>
+
+    <string name="file_explorer_title">Explorador de archivos</string>
+    <string name="copy">Copiar</string>
+    <string name="paste">Pegar</string>
+    <string name="delete">Eliminar</string>
+    <string name="move">Mover</string>
+    <string name="rename">Renombrar</string>
+    <string name="new_folder">Nueva carpeta</string>
+    <string name="select_all">Seleccionar todo</string>
+
+    <string name="permission_usb_rationale">El permiso USB es necesario para acceder a los dispositivos USB conectados.</string>
+    <string name="permission_storage_rationale">El acceso al almacenamiento es necesario para leer y escribir archivos en los discos USB.</string>
+
+    <string name="notif_channel_name">Monitor USB</string>
+    <string name="notif_channel_desc">Monitorea dispositivos USB en segundo plano</string>
+    <string name="notif_waiting">Esperando dispositivo USB...</string>
+    <string name="notif_devices_connected">%d dispositivo(s) USB conectado(s)</string>
+
+    <plurals name="notif_devices_connected_plural">
+        <item quantity="one">%d dispositivo USB conectado</item>
+        <item quantity="other">%d dispositivos USB conectados</item>
+    </plurals>
+</resources>

@@ -14,12 +14,13 @@
     <uses-permission android:name="android.permission.USB_PERMISSION" />
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
-    <!-- Background / anti-kill (méthode Termux) -->
+    <!-- Background / anti-kill (Termux approach) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Shizuku pre-v11 API permission -->
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
@@ -33,13 +34,15 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.UsbDiskManager"
         android:largeHeap="true"
+        android:localeConfig="@xml/locale_config"
         tools:targetApi="31">
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:theme="@style/Theme.UsbDiskManager"
-            android:launchMode="singleTop">
+            android:launchMode="singleTop"
+            android:configChanges="locale|layoutDirection">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -73,7 +76,7 @@
             </intent-filter>
         </receiver>
 
-        <!-- Boot receiver → redémarre UsbMonitorService après reboot -->
+        <!-- Boot receiver — restarts UsbMonitorService after reboot -->
         <receiver
             android:name=".receiver.BootReceiver"
             android:exported="false">
@@ -84,14 +87,14 @@
             </intent-filter>
         </receiver>
 
-        <!-- Service USB persistant anti-kill (toujours actif) -->
+        <!-- Persistent USB monitor service (anti-kill, always active) -->
         <service
             android:name=".service.UsbMonitorService"
             android:exported="false"
             android:stopWithTask="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- Service pour les opérations longues (copie, formatage) -->
+        <!-- Service for long operations (copy, format) -->
         <service
             android:name=".service.DiskOperationService"
             android:exported="false"
