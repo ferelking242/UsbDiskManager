@@ -1,0 +1,164 @@
+name: Build APK (arm64-v8a)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type (debug or release)'
+        required: false
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
+
+env:
+  JAVA_VERSION: '17'
+  GRADLE_VERSION: '8.11.1'
+
+jobs:
+  build:
+    name: Build APK (arm64-v8a)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant Gradle wrapper permission
+        run: chmod +x ./gradlew
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            .gradle/
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', 'gradle/libs.versions.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # ── Debug build (unsigned) ────────────────────────────────────────────
+      - name: Build Debug APK
+        if: ${{ github.event.inputs.build_type == 'debug' || github.event_name == 'pull_request' }}
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Upload Debug APK
+        if: ${{ github.event.inputs.build_type == 'debug' || github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: UsbDiskManager-debug-arm64-v8a
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 7
+
+      # ── Release build ─────────────────────────────────────────────────────
+      - name: Decode keystore
+        if: ${{ github.event.inputs.build_type == 'release' || github.event_name == 'push' }}
+        id: decode_keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > app/keystore.jks
+            echo "has_keystore=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_keystore=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No keystore found — building unsigned release APK"
+          fi
+
+      - name: Build Release APK (signed)
+        if: |
+          (github.event.inputs.build_type == 'release' || github.event_name == 'push') &&
+          steps.decode_keystore.outputs.has_keystore == 'true'
+        env:
+          KEYSTORE_PATH: keystore.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Build Release APK (unsigned fallback)
+        if: |
+          (github.event.inputs.build_type == 'release' || github.event_name == 'push') &&
+          steps.decode_keystore.outputs.has_keystore != 'true'
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace -Pandroid.injected.signing.store.file="" || ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Get version name
+        id: version
+        if: ${{ github.event.inputs.build_type == 'release' || github.event_name == 'push' }}
+        run: |
+          VERSION=$(./gradlew -q :app:printVersionName 2>/dev/null || echo "1.0.0")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "sha_short=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - name: Upload Release APK
+        if: ${{ github.event.inputs.build_type == 'release' || github.event_name == 'push' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: UsbDiskManager-v${{ steps.version.outputs.version }}-${{ steps.version.outputs.sha_short }}-arm64-v8a
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Create Release
+        if: |
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          steps.decode_keystore.outputs.has_keystore == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}-${{ steps.version.outputs.sha_short }}
+          name: USB Disk Manager v${{ steps.version.outputs.version }}
+          body: |
+            ## USB Disk Manager - arm64-v8a APK
+
+            ### What's included
+            - USB OTG device detection & management
+            - File explorer (copy/paste/move/delete)
+            - Disk formatting (FAT32/exFAT/NTFS/EXT4)
+            - Read/Write benchmark
+            - Real-time system logs
+            - Material 3 dark UI
+
+            ### Requirements
+            - Android 8.0+ (API 26+)
+            - Device with USB OTG support
+            - Architecture: arm64-v8a
+
+            Built from commit: ${{ github.sha }}
+          files: app/build/outputs/apk/release/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Clean up keystore
+        if: always()
+        run: rm -f app/keystore.jks

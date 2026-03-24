@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">USB Disk Manager</string>
+    <string name="permission_usb_rationale">USB permission is required to access connected USB devices.</string>
+    <string name="permission_storage_rationale">Storage access is required to read and write files on USB disks.</string>
+    <string name="no_devices_found">No USB devices detected. Connect a USB OTG device.</string>
+    <string name="format_confirmation_title">⚠️ Format Disk?</string>
+    <string name="format_confirmation_message">This will PERMANENTLY ERASE all data on the selected disk. This action cannot be undone. Are you absolutely sure?</string>
+    <string name="format_confirm">Format Now</string>
+    <string name="cancel">Cancel</string>
+    <string name="benchmark_write">Write Speed</string>
+    <string name="benchmark_read">Read Speed</string>
+    <string name="copy">Copy</string>
+    <string name="paste">Paste</string>
+    <string name="delete">Delete</string>
+    <string name="move">Move</string>
+    <string name="rename">Rename</string>
+    <string name="new_folder">New Folder</string>
+    <string name="select_all">Select All</string>
+    <string name="total_space">Total Space</string>
+    <string name="free_space">Free Space</string>
+    <string name="used_space">Used Space</string>
+    <string name="file_system">File System</string>
+    <string name="mount">Mount</string>
+    <string name="unmount">Unmount</string>
+    <string name="eject">Eject</string>
+    <string name="benchmark">Benchmark</string>
+    <string name="logs">System Logs</string>
+    <string name="format">Format</string>
+    <string name="dashboard">Dashboard</string>
+    <string name="files">Files</string>
+    <string name="detail">Details</string>
+</resources>

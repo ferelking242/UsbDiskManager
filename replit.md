@@ -94,3 +94,37 @@ Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHea
 ### `scripts` (`@workspace/scripts`)
 
 Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.
+
+---
+
+## Android Project: USB Disk Manager
+
+Located at `UsbDiskManager/` — a standalone Android Studio project (NOT part of the pnpm workspace).
+
+### Stack
+- Kotlin 2.1 + Jetpack Compose + Material 3
+- Clean Architecture + MVVM
+- Hilt (DI), Coroutines + Flow
+- android.hardware.usb (UsbManager, OTG detection)
+- libaums (USB mass storage)
+- Storage Access Framework (SAF)
+- Min SDK: 26 (Android 8.0) — Target SDK: 35
+
+### Modules
+- `:core` — Models (DiskDevice, FileItem, etc.) + utilities
+- `:usb` — USB device detection/permissions/benchmark/format
+- `:storage` — File operations (copy/paste/move/delete)
+- `:app` — UI screens, ViewModels, Navigation, Foreground service
+
+### Build
+- Build in Android Studio or via `./gradlew :app:assembleRelease`
+- CI: `.github/workflows/build.yml` → builds arm64-v8a APK, creates GitHub Release
+- GitHub Secrets needed: `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`
+
+### Features
+- USB OTG device detection + permission management
+- File explorer (copy/paste/move/delete/rename/search)
+- Disk format: FAT32, exFAT, NTFS, EXT4
+- Read/write benchmark
+- Real-time system logs
+- Material 3 dark UI

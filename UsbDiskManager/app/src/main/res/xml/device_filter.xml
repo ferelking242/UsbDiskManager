@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    USB device filter — matches all USB mass storage devices.
+    Class 8 = USB Mass Storage, SubClass 6 = SCSI, Protocol 80 = Bulk-Only Transport
+-->
+<resources>
+    <usb-device class="8" subclass="6" protocol="80" />
+    <!-- Also match generic HID and hub devices for broader compatibility -->
+    <usb-device class="0" subclass="0" protocol="0" />
+</resources>
