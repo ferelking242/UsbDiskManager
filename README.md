@@ -1,103 +1,78 @@
 # USB Disk Manager
 
-**Application Android native ultra-performante pour la gestion de disques USB OTG.**
+[![Build APK](https://github.com/ferelking242/UsbDiskManager/actions/workflows/build.yml/badge.svg)](https://github.com/ferelking242/UsbDiskManager/actions/workflows/build.yml)
 
-[![Build APK](https://github.com/YOUR_USERNAME/UsbDiskManager/actions/workflows/build.yml/badge.svg)](https://github.com/YOUR_USERNAME/UsbDiskManager/actions/workflows/build.yml)
+Application Android native pour gérer les clés USB et disques OTG. Détection automatique, explorateur de fichiers, formatage, benchmark — le tout sans root pour les opérations courantes.
 
 ---
 
 ## Fonctionnalités
 
-| Fonctionnalité | Statut |
+- Détection et montage automatique des périphériques USB OTG
+- Explorateur de fichiers complet (copier, coller, déplacer, supprimer, renommer)
+- Formatage : FAT32, exFAT, NTFS, EXT4 *(root requis pour certains systèmes de fichiers)*
+- Benchmark lecture/écriture en temps réel
+- Logs système accessibles directement depuis l'app
+- Interface Material 3 avec dark mode
+
+## Stack
+
+| Composant | Choix |
 |---|---|
-| Détection automatique USB OTG | ✅ |
-| Informations disque (nom, espace, FS) | ✅ |
-| Explorateur de fichiers complet | ✅ |
-| Copier / Coller / Déplacer / Supprimer | ✅ |
-| Formatage FAT32, exFAT, NTFS, EXT4 | ✅ |
-| Montage / Démontage | ✅ |
-| Benchmark lecture/écriture | ✅ |
-| Logs système temps réel | ✅ |
-| UI Material 3 dark mode | ✅ |
-| Architecture Clean + MVVM | ✅ |
-| Injection Hilt | ✅ |
+| Langage | Kotlin 2.1 |
+| UI | Jetpack Compose + Material 3 |
+| Architecture | Clean Architecture + MVVM |
+| Injection de dépendances | Hilt |
+| Async | Coroutines + StateFlow |
+| USB bas niveau | libaums |
+| Accès fichiers | SAF + MANAGE_EXTERNAL_STORAGE |
+| Min SDK | 26 (Android 8.0) |
+| Target SDK | 35 (Android 15) |
 
----
-
-## Stack technique
-
-- **Langage** : Kotlin 2.1 (100% natif)
-- **UI** : Jetpack Compose + Material 3
-- **Architecture** : Clean Architecture + MVVM
-- **DI** : Hilt
-- **Async** : Coroutines + Flow
-- **USB** : `android.hardware.usb` (UsbManager, UsbDevice)
-- **Storage** : SAF (Storage Access Framework) + MANAGE_EXTERNAL_STORAGE
-- **Min SDK** : 26 (Android 8.0)
-- **Target SDK** : 35 (Android 15)
-- **ABI** : arm64-v8a uniquement
-
-## Modules
+## Structure du projet
 
 ```
 UsbDiskManager/
-├── :core       → Modèles de données, utilitaires
-├── :usb        → Gestion USB (détection, permissions, benchmark, formatage)
-├── :storage    → Opérations fichiers (copie, suppression, déplacement)
-└── :app        → UI Compose, ViewModels, Navigation, Service
+├── :core       → Modèles partagés, extensions, constantes
+├── :usb        → Détection USB, permissions, benchmark, formatage
+├── :storage    → Opérations fichiers via SAF
+└── :app        → UI, ViewModels, Navigation, Service background
 ```
 
----
+## Build local
 
-## Build
-
-### Prérequis
-
-- Android Studio Ladybug (2024.2+) ou supérieur
-- JDK 17+
-- Android SDK avec API 35
-
-### Build local
+**Prérequis** : Android Studio Ladybug (2024.2+), JDK 17, Android SDK API 35
 
 ```bash
+# Debug
 ./gradlew :app:assembleDebug
-```
 
-L'APK se trouve dans : `app/build/outputs/apk/debug/`
-
-### Build release avec signature
-
-```bash
-export KEYSTORE_PATH=path/to/keystore.jks
-export KEYSTORE_PASSWORD=your_password
-export KEY_ALIAS=your_alias
-export KEY_PASSWORD=your_key_password
+# Release (nécessite une keystore)
 ./gradlew :app:assembleRelease
 ```
 
----
+L'APK se trouve dans `app/build/outputs/apk/`.
 
-## GitHub Actions (CI/CD automatique)
+## CI/CD
 
-Le workflow `.github/workflows/build.yml` :
+Le workflow GitHub Actions (`.github/workflows/build.yml`) se lance à chaque push sur `master` ou `main` :
 
-1. Se déclenche à chaque push sur `main`
-2. Build l'APK arm64-v8a Release
-3. Upload l'APK en artifact GitHub
-4. Crée une GitHub Release automatique si la keystore est configurée
+1. Build APK arm64-v8a Release
+2. Upload en artifact GitHub (30 jours de rétention)
+3. Création d'une GitHub Release automatique *(si la keystore est configurée)*
 
-### Configuration secrets GitHub
+### Configurer la signature automatique
 
-Dans `Settings → Secrets → Actions`, ajouter :
+Dans `Settings → Secrets and variables → Actions`, ajouter :
 
-| Secret | Description |
+| Secret | Valeur |
 |---|---|
-| `KEYSTORE_BASE64` | `base64 -i keystore.jks` → copier le résultat |
+| `KEYSTORE_BASE64` | `base64 -i votre_keystore.jks` |
 | `KEYSTORE_PASSWORD` | Mot de passe du keystore |
 | `KEY_ALIAS` | Alias de la clé |
 | `KEY_PASSWORD` | Mot de passe de la clé |
 
-### Générer une keystore
+Générer une keystore :
 
 ```bash
 keytool -genkey -v -keystore usbdiskmanager.jks \
@@ -105,48 +80,17 @@ keytool -genkey -v -keystore usbdiskmanager.jks \
   -alias usbdiskmanager
 ```
 
----
+## Permissions
 
-## Permissions requises
-
-```xml
-android.permission.MANAGE_EXTERNAL_STORAGE  <!-- Accès total fichiers -->
-android.permission.READ_EXTERNAL_STORAGE    <!-- Android ≤ 12 -->
-android.permission.WRITE_EXTERNAL_STORAGE   <!-- Android ≤ 9 -->
-android.hardware.usb.host                   <!-- USB OTG -->
-android.permission.FOREGROUND_SERVICE       <!-- I/O en background -->
 ```
-
----
-
-## Note sur le formatage
-
-Le formatage nécessite un accès root (`mkfs.*`) car Android ne permet pas de formater des partitions
-depuis le mode utilisateur standard. L'application :
-
-1. Tente les commandes `mkfs.vfat`, `mkfs.exfat`, `mkfs.ntfs`, `mkfs.ext4`
-2. Informe l'utilisateur si root est requis
-3. Fonctionne sur certains appareils rooted ou avec accès shell
-
----
-
-## Librairies utilisées
-
-| Librairie | Usage |
-|---|---|
-| `libaums` (magnusja, GitHub) | USB Mass Storage bas niveau |
-| Hilt | Injection de dépendances |
-| Jetpack Compose | UI déclarative |
-| Navigation Compose | Navigation |
-| Accompanist Permissions | Permissions runtime |
-| Timber | Logging |
-| Coroutines + Flow | Async/réactif |
-| DataStore | Préférences persistantes |
-
----
+MANAGE_EXTERNAL_STORAGE   accès complet aux fichiers
+READ/WRITE_EXTERNAL_STORAGE   Android ≤ 12 / ≤ 9
+android.hardware.usb.host   mode USB Host (OTG)
+FOREGROUND_SERVICE   opérations I/O en arrière-plan
+```
 
 ## Compatibilité
 
 - Android 8.0 → Android 16
-- arm64-v8a uniquement
-- OTG : tous appareils supportant USB Host mode
+- Appareils avec USB OTG (USB Host mode)
+- Architecture arm64-v8a

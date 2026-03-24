@@ -33,3 +33,10 @@ out/
 
 # Kotlin
 .kotlin/
+
+# Replit
+status.py
+.local/
+.replit
+replit.nix
+replit.md
