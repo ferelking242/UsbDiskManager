@@ -6,6 +6,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.usbdiskmanager.core.model.DiskOperationResult
 import com.usbdiskmanager.log.LogManager
+import com.usbdiskmanager.shizuku.ShizukuManager
+import com.usbdiskmanager.shizuku.ShizukuState
 import com.usbdiskmanager.usb.api.UsbDeviceRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,30 +28,61 @@ data class DashboardUiState(
 @HiltViewModel
 class DashboardViewModel @Inject constructor(
     private val usbRepository: UsbDeviceRepository,
-    private val logManager: LogManager
+    private val logManager: LogManager,
+    private val shizukuManager: ShizukuManager
 ) : ViewModel() {
 
     val connectedDevices = usbRepository.connectedDevices
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val shizukuState: StateFlow<ShizukuState> = shizukuManager.state
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ShizukuState.NotRunning)
+
     private val _uiState = MutableStateFlow(DashboardUiState())
     val uiState: StateFlow<DashboardUiState> = _uiState.asStateFlow()
 
     init {
-        logManager.log("App started — scanning USB devices")
+        logManager.log("App démarrée — scan USB en cours…")
+        shizukuManager.initialize()
+        observeShizukuState()
+    }
+
+    private fun observeShizukuState() {
+        viewModelScope.launch {
+            shizukuManager.state.collect { state ->
+                val msg = when (state) {
+                    is ShizukuState.Ready ->
+                        "Shizuku actif — accès privilégié : NTFS/EXT4, format, blkid disponibles"
+                    is ShizukuState.NotRunning ->
+                        "Shizuku non démarré — mode standard (FAT32/exFAT seulement)"
+                    is ShizukuState.NotInstalled ->
+                        "Shizuku non installé — mode standard"
+                    is ShizukuState.PermissionDenied ->
+                        "Shizuku: permission refusée"
+                    is ShizukuState.PermissionNotRequested ->
+                        "Shizuku actif — en attente d'autorisation"
+                }
+                logManager.log(msg)
+            }
+        }
+    }
+
+    fun requestShizukuPermission() {
+        logManager.log("Demande de permission Shizuku…")
+        shizukuManager.requestPermission()
     }
 
     fun onUsbDeviceAttached(device: UsbDevice) {
         viewModelScope.launch {
-            logManager.log("USB device attached: ${device.productName ?: device.deviceName}")
+            logManager.log("USB connecté: ${device.productName ?: device.deviceName}")
             val hasPermission = usbRepository.hasPermission(device)
             if (!hasPermission) {
-                logManager.log("Requesting USB permission for ${device.productName ?: device.deviceName}…")
+                logManager.log("Demande de permission USB…")
                 val granted = usbRepository.requestPermission(device)
-                logManager.log(if (granted) "Permission granted ✓" else "Permission denied ✗")
+                logManager.log(if (granted) "Permission USB accordée ✓" else "Permission USB refusée ✗")
                 if (granted) usbRepository.refreshConnectedDevices()
             } else {
-                logManager.log("Permission already granted for ${device.productName ?: device.deviceName}")
+                logManager.log("Permission USB déjà accordée")
                 usbRepository.refreshConnectedDevices()
             }
         }
@@ -57,31 +90,33 @@ class DashboardViewModel @Inject constructor(
 
     fun onSafUriGranted(uri: Uri) {
         _uiState.value = _uiState.value.copy(safUri = uri)
-        logManager.log("SAF access granted: $uri")
+        logManager.log("Accès SAF accordé: $uri")
     }
 
     fun refreshDevices() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
-            logManager.log("Refreshing device list…")
+            logManager.log("Actualisation…")
             usbRepository.refreshConnectedDevices()
             val count = connectedDevices.value.size
-            logManager.log("Scan complete — $count device(s) found")
+            val shizuku = if (shizukuManager.isReady) " [Shizuku actif]" else ""
+            logManager.log("Scan terminé — $count périphérique(s)$shizuku")
             _uiState.value = _uiState.value.copy(isLoading = false)
         }
     }
 
     fun mountDevice(deviceId: String) {
         viewModelScope.launch {
-            logManager.log("Mounting device $deviceId…")
+            val mode = if (shizukuManager.isReady) " via Shizuku" else ""
+            logManager.log("Montage$mode…")
             val result = usbRepository.mountDevice(deviceId)
             when (result) {
                 is DiskOperationResult.Success -> {
-                    logManager.log("Mount: ${result.message}")
+                    logManager.log("Montage: ${result.message}")
                     _uiState.value = _uiState.value.copy(operationMessage = result.message)
                 }
                 is DiskOperationResult.Error -> {
-                    logManager.log("Mount error: ${result.message}")
+                    logManager.log("Erreur montage: ${result.message}")
                     _uiState.value = _uiState.value.copy(errorMessage = result.message)
                 }
                 else -> {}
@@ -91,15 +126,15 @@ class DashboardViewModel @Inject constructor(
 
     fun unmountDevice(deviceId: String) {
         viewModelScope.launch {
-            logManager.log("Unmounting device $deviceId…")
+            logManager.log("Éjection du périphérique $deviceId…")
             val result = usbRepository.unmountDevice(deviceId)
             when (result) {
                 is DiskOperationResult.Success -> {
-                    logManager.log("Unmount: ${result.message}")
+                    logManager.log("Éjection: ${result.message}")
                     _uiState.value = _uiState.value.copy(operationMessage = result.message)
                 }
                 is DiskOperationResult.Error -> {
-                    logManager.log("Unmount error: ${result.message}")
+                    logManager.log("Erreur éjection: ${result.message}")
                     _uiState.value = _uiState.value.copy(errorMessage = result.message)
                 }
                 else -> {}
