@@ -52,7 +52,7 @@ class UsbDeviceRepositoryImpl @Inject constructor(
     /**
      * Scan the UsbManager device list and update our state flow.
      */
-    fun refreshConnectedDevices() {
+    override fun refreshConnectedDevices() {
         val devices = usbManager.deviceList.values
         val diskDevices = devices.mapNotNull { usbDevice ->
             if (isMassStorageDevice(usbDevice)) {
@@ -65,7 +65,7 @@ class UsbDeviceRepositoryImpl @Inject constructor(
         _connectedDevices.value = diskDevices
     }
 
-    fun onDeviceAttached(usbDevice: UsbDevice) {
+    override fun onDeviceAttached(usbDevice: UsbDevice) {
         if (isMassStorageDevice(usbDevice)) {
             val id = deviceId(usbDevice)
             rawDeviceMap[id] = usbDevice
@@ -78,7 +78,7 @@ class UsbDeviceRepositoryImpl @Inject constructor(
         }
     }
 
-    fun onDeviceDetached(usbDevice: UsbDevice) {
+    override fun onDeviceDetached(usbDevice: UsbDevice) {
         val id = deviceId(usbDevice)
         rawDeviceMap.remove(id)
         val current = _connectedDevices.value.toMutableList()
