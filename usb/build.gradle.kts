@@ -30,6 +30,4 @@ dependencies {
     implementation(libs.timber)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
-    // libaums for USB mass storage access
-    implementation("com.github.magnusja:libaums:0.9.1")
 }
