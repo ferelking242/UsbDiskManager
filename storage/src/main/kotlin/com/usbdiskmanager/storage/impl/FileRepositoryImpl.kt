@@ -36,9 +36,17 @@ class FileRepositoryImpl @Inject constructor(
         sortOrder: FileSortOrder
     ): List<FileItem> = withContext(Dispatchers.IO) {
         val dir = File(path)
-        if (!dir.exists() || !dir.isDirectory) {
+        if (!dir.exists()) {
             Timber.w("Directory not found: $path")
-            return@withContext emptyList()
+            throw Exception("Dossier introuvable: $path\nLa clé est-elle toujours montée ?")
+        }
+        if (!dir.isDirectory) {
+            Timber.w("Path is not a directory: $path")
+            throw Exception("$path n'est pas un dossier")
+        }
+        if (!dir.canRead()) {
+            Timber.w("Directory not readable: $path")
+            throw Exception("Permission refusée: impossible de lire $path")
         }
         val files = dir.listFileItems(showHidden)
         files.sortedWith(sortOrder.comparator())

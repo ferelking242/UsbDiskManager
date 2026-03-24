@@ -14,9 +14,12 @@
     <uses-permission android:name="android.permission.USB_PERMISSION" />
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
-    <!-- Background process for I/O -->
+    <!-- Background / anti-kill (méthode Termux) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".UsbDiskManagerApp"
@@ -48,7 +51,7 @@
                 android:resource="@xml/device_filter" />
         </activity>
 
-        <!-- USB permission broadcast receiver -->
+        <!-- USB permission broadcast receiver (manifest-registered) -->
         <receiver
             android:name=".usb.UsbBroadcastReceiver"
             android:exported="false">
@@ -59,7 +62,25 @@
             </intent-filter>
         </receiver>
 
-        <!-- Foreground service for disk operations -->
+        <!-- Boot receiver → redémarre UsbMonitorService après reboot -->
+        <receiver
+            android:name=".receiver.BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Service USB persistant anti-kill (toujours actif) -->
+        <service
+            android:name=".service.UsbMonitorService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Service pour les opérations longues (copie, formatage) -->
         <service
             android:name=".service.DiskOperationService"
             android:exported="false"

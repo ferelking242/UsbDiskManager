@@ -1,6 +1,8 @@
 package com.usbdiskmanager
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
@@ -12,7 +14,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
+import com.usbdiskmanager.service.UsbMonitorService
 import com.usbdiskmanager.ui.navigation.AppNavHost
 import com.usbdiskmanager.ui.theme.UsbDiskManagerTheme
 import com.usbdiskmanager.usb.api.UsbDeviceRepository
@@ -42,19 +46,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val notificationPermLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        Timber.d("POST_NOTIFICATIONS granted: $granted")
+        if (granted) startUsbMonitorService()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (!Environment.isExternalStorageManager()) {
-                Timber.d("Requesting MANAGE_EXTERNAL_STORAGE")
-                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-                intent.data = "package:${packageName}".toUri()
-                startActivity(intent)
-            }
-        }
-
+        requestStoragePermission()
+        requestNotificationPermission()
+        startUsbMonitorService()
         handleUsbIntent(intent)
 
         setContent {
@@ -69,6 +74,49 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleUsbIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Refresh device list every time app comes to foreground
+        usbRepository.refreshConnectedDevices()
+    }
+
+    private fun requestStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                Timber.d("Requesting MANAGE_EXTERNAL_STORAGE")
+                try {
+                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                    intent.data = "package:${packageName}".toUri()
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Timber.w("Could not open all-files permission screen: ${e.message}")
+                    try {
+                        startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                notificationPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
+    private fun startUsbMonitorService() {
+        try {
+            UsbMonitorService.start(this)
+            Timber.d("UsbMonitorService started from MainActivity")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to start UsbMonitorService")
+        }
     }
 
     private fun handleUsbIntent(intent: Intent?) {

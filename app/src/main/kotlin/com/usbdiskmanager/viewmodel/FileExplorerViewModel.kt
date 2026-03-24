@@ -44,13 +44,16 @@ class FileExplorerViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
-    private val initialPath: String = savedStateHandle.get<String>("mountPoint") ?: ""
+    // BUGFIX: Decode "|" back to "/" — the nav route encodes "/" as "|" to avoid path conflicts
+    private val initialPath: String =
+        (savedStateHandle.get<String>("mountPoint") ?: "").replace("|", "/")
 
     private val _uiState = MutableStateFlow(FileExplorerUiState(currentPath = initialPath))
     val uiState: StateFlow<FileExplorerUiState> = _uiState.asStateFlow()
 
     init {
         if (initialPath.isNotEmpty()) {
+            Timber.d("FileExplorer init path: $initialPath")
             loadFiles(initialPath)
         }
     }
@@ -87,6 +90,13 @@ class FileExplorerViewModel @Inject constructor(
     }
 
     fun loadFiles(path: String) {
+        if (path.isEmpty()) {
+            _uiState.value = _uiState.value.copy(
+                isLoading = false,
+                errorMessage = "Chemin vide — impossible de charger les fichiers"
+            )
+            return
+        }
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
             try {
@@ -95,12 +105,13 @@ class FileExplorerViewModel @Inject constructor(
                     _uiState.value.showHiddenFiles,
                     _uiState.value.sortOrder
                 )
+                Timber.d("Loaded ${files.size} file(s) from $path")
                 _uiState.value = _uiState.value.copy(files = files, isLoading = false)
             } catch (e: Exception) {
                 Timber.e(e, "Error loading files from $path")
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    errorMessage = "Error loading files: ${e.message}"
+                    errorMessage = "Erreur: ${e.message}"
                 )
             }
         }
@@ -112,14 +123,12 @@ class FileExplorerViewModel @Inject constructor(
 
     fun toggleSelection(filePath: String) {
         val selected = _uiState.value.selectedFiles.toMutableSet()
-        if (selected.contains(filePath)) selected.remove(filePath)
-        else selected.add(filePath)
+        if (selected.contains(filePath)) selected.remove(filePath) else selected.add(filePath)
         _uiState.value = _uiState.value.copy(selectedFiles = selected)
     }
 
     fun selectAll() {
-        val allPaths = _uiState.value.files.map { it.path }.toSet()
-        _uiState.value = _uiState.value.copy(selectedFiles = allPaths)
+        _uiState.value = _uiState.value.copy(selectedFiles = _uiState.value.files.map { it.path }.toSet())
     }
 
     fun clearSelection() {
@@ -127,37 +136,35 @@ class FileExplorerViewModel @Inject constructor(
     }
 
     fun copy() {
-        val selectedItems = getSelectedItems()
-        if (selectedItems.isEmpty()) return
-        fileRepository.setClipboard(selectedItems, ClipboardOperation.COPY, _uiState.value.currentPath)
+        val items = getSelectedItems()
+        if (items.isEmpty()) return
+        fileRepository.setClipboard(items, ClipboardOperation.COPY, _uiState.value.currentPath)
         _uiState.value = _uiState.value.copy(
             clipboard = fileRepository.getClipboard(),
             selectedFiles = emptySet(),
-            operationMessage = "${selectedItems.size} item(s) copied to clipboard"
+            operationMessage = "${items.size} élément(s) copié(s)"
         )
     }
 
     fun cut() {
-        val selectedItems = getSelectedItems()
-        if (selectedItems.isEmpty()) return
-        fileRepository.setClipboard(selectedItems, ClipboardOperation.CUT, _uiState.value.currentPath)
+        val items = getSelectedItems()
+        if (items.isEmpty()) return
+        fileRepository.setClipboard(items, ClipboardOperation.CUT, _uiState.value.currentPath)
         _uiState.value = _uiState.value.copy(
             clipboard = fileRepository.getClipboard(),
             selectedFiles = emptySet(),
-            operationMessage = "${selectedItems.size} item(s) cut to clipboard"
+            operationMessage = "${items.size} élément(s) coupé(s)"
         )
     }
 
     fun paste() {
         val dest = _uiState.value.currentPath
         _uiState.value = _uiState.value.copy(isOperationRunning = true, operationProgress = 0)
-
         fileRepository.pasteClipboard(dest)
             .onEach { result ->
                 when (result) {
                     is DiskOperationResult.Progress -> _uiState.value = _uiState.value.copy(
-                        operationProgress = result.percent,
-                        operationMessage = result.message
+                        operationProgress = result.percent, operationMessage = result.message
                     )
                     is DiskOperationResult.Success -> {
                         _uiState.value = _uiState.value.copy(
@@ -168,16 +175,14 @@ class FileExplorerViewModel @Inject constructor(
                         refresh()
                     }
                     is DiskOperationResult.Error -> _uiState.value = _uiState.value.copy(
-                        isOperationRunning = false,
-                        errorMessage = result.message
+                        isOperationRunning = false, errorMessage = result.message
                     )
                 }
             }
             .catch { e ->
                 Timber.e(e, "Paste error")
                 _uiState.value = _uiState.value.copy(
-                    isOperationRunning = false,
-                    errorMessage = "Paste error: ${e.message}"
+                    isOperationRunning = false, errorMessage = "Erreur de collage: ${e.message}"
                 )
             }
             .launchIn(viewModelScope)
@@ -198,8 +203,7 @@ class FileExplorerViewModel @Inject constructor(
                     refresh()
                 }
                 is DiskOperationResult.Error -> _uiState.value = _uiState.value.copy(
-                    isOperationRunning = false,
-                    errorMessage = result.message
+                    isOperationRunning = false, errorMessage = result.message
                 )
                 else -> {}
             }
@@ -210,13 +214,8 @@ class FileExplorerViewModel @Inject constructor(
         viewModelScope.launch {
             val result = fileRepository.createDirectory(_uiState.value.currentPath, name)
             when (result) {
-                is DiskOperationResult.Success -> {
-                    _uiState.value = _uiState.value.copy(operationMessage = result.message)
-                    refresh()
-                }
-                is DiskOperationResult.Error -> _uiState.value = _uiState.value.copy(
-                    errorMessage = result.message
-                )
+                is DiskOperationResult.Success -> { _uiState.value = _uiState.value.copy(operationMessage = result.message); refresh() }
+                is DiskOperationResult.Error -> _uiState.value = _uiState.value.copy(errorMessage = result.message)
                 else -> {}
             }
         }
@@ -226,13 +225,8 @@ class FileExplorerViewModel @Inject constructor(
         viewModelScope.launch {
             val result = fileRepository.rename(item, newName)
             when (result) {
-                is DiskOperationResult.Success -> {
-                    _uiState.value = _uiState.value.copy(operationMessage = result.message)
-                    refresh()
-                }
-                is DiskOperationResult.Error -> _uiState.value = _uiState.value.copy(
-                    errorMessage = result.message
-                )
+                is DiskOperationResult.Success -> { _uiState.value = _uiState.value.copy(operationMessage = result.message); refresh() }
+                is DiskOperationResult.Error -> _uiState.value = _uiState.value.copy(errorMessage = result.message)
                 else -> {}
             }
         }
