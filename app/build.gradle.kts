@@ -97,6 +97,7 @@ dependencies {
     implementation(project(":usb"))
     implementation(project(":storage"))
 
+    implementation(libs.appcompat)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
