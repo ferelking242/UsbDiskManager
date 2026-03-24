@@ -36,7 +36,7 @@ private data class UsbMountInfo(
     val fsType: String
 )
 
-private data class PartitionInfo(
+internal data class PartitionInfo(
     val blockDev: String,
     val label: String,
     val fsType: String,
