@@ -117,5 +117,7 @@ dependencies {
     implementation(libs.accompanist.permissions)
     implementation(libs.datastore.preferences)
     implementation(libs.timber)
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
     debugImplementation(libs.compose.ui.tooling)
 }

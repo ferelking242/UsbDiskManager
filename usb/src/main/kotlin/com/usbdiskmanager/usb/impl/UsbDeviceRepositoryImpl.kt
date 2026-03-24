@@ -11,8 +11,9 @@ import android.os.Build
 import android.os.StatFs
 import com.usbdiskmanager.core.model.DiskDevice
 import com.usbdiskmanager.core.model.DiskOperationResult
+import com.usbdiskmanager.core.model.DiskPartition
 import com.usbdiskmanager.core.model.FileSystemType
-import com.usbdiskmanager.core.util.executeShellCommand
+import com.usbdiskmanager.core.util.PrivilegedCommandRunner
 import com.usbdiskmanager.usb.api.UsbDeviceRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
@@ -22,6 +23,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import timber.log.Timber
 import java.io.File
+import java.io.RandomAccessFile
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.resume
@@ -34,9 +36,18 @@ private data class UsbMountInfo(
     val fsType: String
 )
 
+internal data class PartitionInfo(
+    val blockDev: String,
+    val label: String,
+    val fsType: String,
+    val sizeMB: Long,
+    val mountPoint: String?
+)
+
 @Singleton
 class UsbDeviceRepositoryImpl @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val commandRunner: PrivilegedCommandRunner
 ) : UsbDeviceRepository {
 
     private val usbManager: UsbManager =
@@ -55,96 +66,84 @@ class UsbDeviceRepositoryImpl @Inject constructor(
 
     override fun refreshConnectedDevices() {
         val mounts = findAllMountPoints()
-        Timber.d("External mounts found: ${mounts.map { "${it.mountPoint}(${it.fsType})" }}")
+        Timber.d("External mounts: ${mounts.map { "${it.mountPoint}(${it.fsType})" }}")
+        Timber.d("Privileged access: ${commandRunner.hasPrivilegedAccess}")
 
-        val devices = usbManager.deviceList.values
-        val diskDevices = devices.mapNotNull { usbDevice ->
-            if (isMassStorageDevice(usbDevice)) {
-                val id = deviceId(usbDevice)
-                rawDeviceMap[id] = usbDevice
-                buildDiskDevice(usbDevice, mounts)
-            } else null
-        }
-        Timber.d("USB mass storage devices: ${diskDevices.size}")
+        val diskDevices = usbManager.deviceList.values
+            .filter { isMassStorageDevice(it) }
+            .map { device ->
+                val id = deviceId(device)
+                rawDeviceMap[id] = device
+                buildDiskDevice(device, mounts)
+            }
+
+        Timber.d("USB mass storage devices found: ${diskDevices.size}")
         _connectedDevices.value = diskDevices
     }
 
-    override fun onDeviceAttached(usbDevice: UsbDevice) {
-        if (isMassStorageDevice(usbDevice)) {
-            val id = deviceId(usbDevice)
-            rawDeviceMap[id] = usbDevice
-            val mounts = findAllMountPoints()
-            val diskDevice = buildDiskDevice(usbDevice, mounts)
-            val current = _connectedDevices.value.toMutableList()
-            current.removeAll { it.id == id }
-            current.add(diskDevice)
-            _connectedDevices.value = current
-            Timber.i("USB mass storage attached: ${usbDevice.deviceName}, " +
-                     "mount=${diskDevice.mountPoint}, total=${diskDevice.totalSpace}")
-        } else {
-            Timber.d("Ignoring non-mass-storage USB: ${usbDevice.deviceName} class=${usbDevice.deviceClass}")
+    override fun onDeviceAttached(device: UsbDevice) {
+        if (!isMassStorageDevice(device)) {
+            Timber.d("Ignoring non-mass-storage USB: class=${device.deviceClass}")
+            return
         }
+        val id = deviceId(device)
+        rawDeviceMap[id] = device
+        val mounts = findAllMountPoints()
+        val diskDevice = buildDiskDevice(device, mounts)
+        _connectedDevices.value = _connectedDevices.value
+            .filterNot { it.id == id }
+            .plus(diskDevice)
+        Timber.i("USB attached: ${device.deviceName}, mount=${diskDevice.mountPoint}")
     }
 
-    override fun onDeviceDetached(usbDevice: UsbDevice) {
-        val id = deviceId(usbDevice)
+    override fun onDeviceDetached(device: UsbDevice) {
+        val id = deviceId(device)
         rawDeviceMap.remove(id)
-        val current = _connectedDevices.value.toMutableList()
-        current.removeAll { it.id == id }
-        _connectedDevices.value = current
-        Timber.i("USB device detached: ${usbDevice.deviceName}")
+        _connectedDevices.value = _connectedDevices.value.filterNot { it.id == id }
+        Timber.i("USB detached: ${device.deviceName}")
     }
 
     override suspend fun requestPermission(device: UsbDevice): Boolean =
         suspendCancellableCoroutine { cont ->
-            val permissionIntent = PendingIntent.getBroadcast(
+            val pendingIntent = PendingIntent.getBroadcast(
                 context,
                 device.deviceId,
                 Intent(ACTION_USB_PERMISSION).apply { `package` = context.packageName },
                 PendingIntent.FLAG_UPDATE_CURRENT or
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                            PendingIntent.FLAG_MUTABLE else 0
             )
-
             val filter = IntentFilter(ACTION_USB_PERMISSION)
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(ctx: Context, intent: Intent) {
                     if (intent.action == ACTION_USB_PERMISSION) {
-                        val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                        val granted = intent.getBooleanExtra(
+                            UsbManager.EXTRA_PERMISSION_GRANTED, false
+                        )
                         context.unregisterReceiver(this)
                         if (cont.isActive) cont.resume(granted)
                     }
                 }
             }
-
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
             } else {
                 @Suppress("UnspecifiedRegisterReceiverFlag")
                 context.registerReceiver(receiver, filter)
             }
-
             if (usbManager.hasPermission(device)) {
                 context.unregisterReceiver(receiver)
                 cont.resume(true)
             } else {
-                usbManager.requestPermission(device, permissionIntent)
+                usbManager.requestPermission(device, pendingIntent)
             }
-
             cont.invokeOnCancellation {
                 try { context.unregisterReceiver(receiver) } catch (_: Exception) {}
             }
         }
 
-    override fun hasPermission(device: UsbDevice): Boolean =
-        usbManager.hasPermission(device)
+    override fun hasPermission(device: UsbDevice): Boolean = usbManager.hasPermission(device)
 
-    /**
-     * "Mount" in our context = vérifier si Android a auto-monté le périphérique,
-     * lire l'espace réel, créer le dossier app, et mettre à jour l'état.
-     *
-     * Android monte automatiquement les clés USB compatibles (FAT32/exFAT).
-     * Pour NTFS/EXT4, on tente plusieurs stratégies.
-     */
     override suspend fun mountDevice(deviceId: String): DiskOperationResult {
         val device = rawDeviceMap[deviceId]
             ?: return DiskOperationResult.Error("Périphérique introuvable: $deviceId")
@@ -154,29 +153,29 @@ class UsbDeviceRepositoryImpl @Inject constructor(
             val mountInfo = matchDeviceToMount(device, mounts)
 
             if (mountInfo != null) {
-                // Déjà monté par Android — mettre à jour l'état
-                updateDeviceMountState(deviceId, mountInfo.mountPoint, true)
+                // Already mounted by Android
                 val (total, free) = getSpaceInfo(mountInfo.mountPoint)
-                updateDeviceSpaceInfo(deviceId, total, free, mountInfo.fsType)
-                createAppDirectoriesOnDevice(mountInfo.mountPoint)
+                updateDeviceState(deviceId, mountInfo.mountPoint, true, total, free, mountInfo.fsType)
+                createAppDirectories(mountInfo.mountPoint)
                 DiskOperationResult.Success(
                     "✓ Monté sur ${mountInfo.mountPoint}\n" +
-                    "Total: ${formatBytes(total)}  •  Libre: ${formatBytes(free)}\n" +
-                    "Système: ${normalizeFsType(mountInfo.fsType)}"
+                    "Système: ${normalizeFsType(mountInfo.fsType)}\n" +
+                    "Total: ${fmtBytes(total)}  •  Libre: ${fmtBytes(free)}\n" +
+                    if (commandRunner.hasPrivilegedAccess) "Mode: Shizuku (privilégié)" else "Mode: Standard"
                 )
             } else {
-                // Pas encore monté → détecter le block device et essayer de monter
                 val blockDevice = findBlockDeviceForUsb(device)
                 if (blockDevice != null) {
-                    val mountResult = tryMountBlockDevice(deviceId, device, blockDevice)
-                    mountResult
+                    tryMountBlockDevice(deviceId, device, blockDevice)
                 } else {
                     DiskOperationResult.Error(
-                        "Périphérique non monté par le système.\n\n" +
-                        "Solutions :\n" +
+                        "Périphérique non monté.\n\n" +
                         "• Débrancher et rebrancher la clé\n" +
-                        "• Attendre ~3 secondes puis appuyer sur Actualiser\n" +
-                        "• Vérifier que la clé est en FAT32 ou exFAT"
+                        "• Attendre ~3 secondes puis appuyer Actualiser\n" +
+                        "• S'assurer que la clé est en FAT32 ou exFAT\n" +
+                        if (!commandRunner.hasPrivilegedAccess)
+                            "\nActiver Shizuku permet de monter NTFS/EXT4 aussi"
+                        else ""
                     )
                 }
             }
@@ -189,21 +188,24 @@ class UsbDeviceRepositoryImpl @Inject constructor(
     override suspend fun unmountDevice(deviceId: String): DiskOperationResult {
         val device = _connectedDevices.value.find { it.id == deviceId }
             ?: return DiskOperationResult.Error("Périphérique introuvable")
+        val mountPoint = device.mountPoint
 
         return try {
-            val mountPoint = device.mountPoint
+            // Flush writes before unmounting
+            commandRunner.run("sync")
+
             if (mountPoint != null) {
-                executeShellCommand("sync")
-                val result = executeShellCommand(
-                    "umount \"$mountPoint\" 2>&1 || umount -l \"$mountPoint\" 2>&1"
-                )
+                val result = commandRunner.run("umount \"$mountPoint\" 2>&1 || umount -l \"$mountPoint\" 2>&1")
                 updateDeviceMountState(deviceId, null, false)
                 if (result.isSuccess) {
-                    DiskOperationResult.Success("✓ Périphérique éjecté en toute sécurité")
+                    DiskOperationResult.Success("✓ Éjecté proprement depuis $mountPoint")
                 } else {
+                    // Success from Android's perspective even if umount needs root
                     DiskOperationResult.Success(
-                        "Périphérique marqué comme non monté\n" +
-                        "(éjection propre nécessite root)"
+                        "✓ Éjection demandée\n" +
+                        if (!commandRunner.hasPrivilegedAccess)
+                            "(éjection propre nécessite Shizuku ou root)"
+                        else "(sync effectué)"
                     )
                 }
             } else {
@@ -211,8 +213,7 @@ class UsbDeviceRepositoryImpl @Inject constructor(
                 DiskOperationResult.Success("Périphérique non monté")
             }
         } catch (e: Exception) {
-            Timber.e(e, "Unmount failed for $deviceId")
-            DiskOperationResult.Error("Erreur d'éjection: ${e.message}")
+            DiskOperationResult.Error("Erreur: ${e.message}")
         }
     }
 
@@ -221,50 +222,51 @@ class UsbDeviceRepositoryImpl @Inject constructor(
         fileSystem: String,
         label: String
     ): Flow<DiskOperationResult> = flow {
-        emit(DiskOperationResult.Progress(0, "Préparation du formatage…"))
-        val device = rawDeviceMap[deviceId]
-        if (device == null) {
-            emit(DiskOperationResult.Error("Périphérique introuvable"))
-            return@flow
+        emit(DiskOperationResult.Progress(0, "Préparation…"))
+
+        if (!commandRunner.hasPrivilegedAccess) {
+            emit(DiskOperationResult.Progress(5, "Mode standard — Shizuku requis pour formatage"))
         }
+
+        val device = rawDeviceMap[deviceId]
+            ?: run { emit(DiskOperationResult.Error("Périphérique introuvable")); return@flow }
 
         emit(DiskOperationResult.Progress(10, "Recherche du bloc device…"))
         val blockDevice = findBlockDeviceForUsb(device)
-        if (blockDevice == null) {
-            val mounts = findAllMountPoints()
-            val mountInfo = matchDeviceToMount(device, mounts)
-            if (mountInfo == null) {
+        val mounts = findAllMountPoints()
+        val mountInfo = matchDeviceToMount(device, mounts)
+        val blockDev = blockDevice ?: mountInfo?.blockDevice
+            ?: run {
                 emit(DiskOperationResult.Error(
-                    "Bloc device introuvable. Le formatage nécessite root ou accès kernel."
+                    "Impossible de trouver le bloc device.\n" +
+                    "Le formatage nécessite Shizuku ou root."
                 ))
                 return@flow
             }
-        }
-
-        val mounts = findAllMountPoints()
-        val mountInfo = matchDeviceToMount(device, mounts)
-        val blockDev = blockDevice ?: mountInfo?.blockDevice ?: run {
-            emit(DiskOperationResult.Error("Impossible de trouver le périphérique bloc"))
-            return@flow
-        }
 
         emit(DiskOperationResult.Progress(20, "Démontage…"))
-        mountInfo?.mountPoint?.let { mp ->
-            executeShellCommand("sync && umount \"$mp\" 2>&1 || true")
-        }
+        mountInfo?.mountPoint?.let { commandRunner.run("sync && umount \"$it\" 2>&1 || true") }
 
-        emit(DiskOperationResult.Progress(30, "Formatage en $fileSystem…"))
+        emit(DiskOperationResult.Progress(35, "Formatage en $fileSystem…"))
         val cmd = buildFormatCommand(blockDev, fileSystem, label)
-        Timber.d("Format command: $cmd")
-        val result = executeShellCommand(cmd)
+        Timber.d("Format command: $cmd (privileged=${commandRunner.hasPrivilegedAccess})")
+        val result = commandRunner.run(cmd, forcePrivileged = true)
 
         if (result.isSuccess) {
+            emit(DiskOperationResult.Progress(95, "Finalisation…"))
+            commandRunner.run("sync")
             emit(DiskOperationResult.Progress(100, "Formatage terminé !"))
-            emit(DiskOperationResult.Success("✓ Formaté en $fileSystem avec succès"))
+            emit(DiskOperationResult.Success(
+                "✓ Formaté en $fileSystem avec succès\n" +
+                if (label.isNotEmpty()) "Label: $label" else ""
+            ))
         } else {
+            val errMsg = result.output.take(300)
             emit(DiskOperationResult.Error(
-                "Formatage échoué: ${result.output.take(200)}\n\n" +
-                "Note: le formatage nécessite root."
+                "Formatage échoué: $errMsg\n\n" +
+                if (!commandRunner.hasPrivilegedAccess)
+                    "Active Shizuku pour le formatage sans root."
+                else "Vérifier que le périphérique est accessible."
             ))
         }
     }
@@ -272,25 +274,16 @@ class UsbDeviceRepositoryImpl @Inject constructor(
     override suspend fun refreshDevice(deviceId: String): DiskDevice? {
         val device = rawDeviceMap[deviceId] ?: return null
         val mounts = findAllMountPoints()
-        val diskDevice = buildDiskDevice(device, mounts)
-        val current = _connectedDevices.value.toMutableList()
-        val index = current.indexOfFirst { it.id == deviceId }
-        if (index >= 0) current[index] = diskDevice else current.add(diskDevice)
-        _connectedDevices.value = current
-        return diskDevice
+        val updated = buildDiskDevice(device, mounts)
+        _connectedDevices.value = _connectedDevices.value
+            .map { if (it.id == deviceId) updated else it }
+        return updated
     }
 
     override fun getRawDevice(deviceId: String): UsbDevice? = rawDeviceMap[deviceId]
 
     // ─── Device building ─────────────────────────────────────────────────────
 
-    private fun deviceId(device: UsbDevice): String =
-        "${device.vendorId}_${device.productId}_${device.deviceName.hashCode()}"
-
-    /**
-     * Vérifie si le périphérique USB est un Mass Storage (class 8).
-     * Vérifie aussi les interfaces (certains hubs rapportent class 0 au niveau device).
-     */
     private fun isMassStorageDevice(device: UsbDevice): Boolean {
         if (device.deviceClass == 8) return true
         for (i in 0 until device.interfaceCount) {
@@ -299,16 +292,16 @@ class UsbDeviceRepositoryImpl @Inject constructor(
         return false
     }
 
+    private fun deviceId(device: UsbDevice): String =
+        "${device.vendorId}_${device.productId}_${device.deviceName.hashCode()}"
+
     private fun buildDiskDevice(device: UsbDevice, mounts: List<UsbMountInfo>): DiskDevice {
         val id = deviceId(device)
         val mountInfo = matchDeviceToMount(device, mounts)
         val mountPoint = mountInfo?.mountPoint
         val (total, free) = getSpaceInfo(mountPoint)
         val fsType = mountInfo?.fsType?.let { normalizeFsType(it) }
-
-        if (mountPoint != null) {
-            createAppDirectoriesOnDevice(mountPoint)
-        }
+        if (mountPoint != null) createAppDirectories(mountPoint)
 
         return DiskDevice(
             id = id,
@@ -327,305 +320,181 @@ class UsbDeviceRepositoryImpl @Inject constructor(
         )
     }
 
-    // ─── Mount detection — stratégie multi-couche ────────────────────────────
+    // ─── Mount detection ─────────────────────────────────────────────────────
 
-    /**
-     * Cherche tous les points de montage externes possibles.
-     *
-     * Ordre de priorité :
-     *   1. /proc/mounts  → lecture directe du kernel (toujours exact)
-     *   2. /proc/self/mounts → alternative si /proc/mounts inaccessible
-     *   3. Scan /storage/ → dossiers XXXX-XXXX créés par vold
-     *   4. Scan /mnt/media_rw/ → autre chemin courant
-     *   5. Scan /mnt/usb_storage/ → certains OEM (Samsung, etc.)
-     */
     private fun findAllMountPoints(): List<UsbMountInfo> {
         val result = mutableListOf<UsbMountInfo>()
-        val seenMountPoints = mutableSetOf<String>()
+        val seen = mutableSetOf<String>()
 
-        // Stratégie 1 & 2 : lire /proc/mounts
-        val mountFiles = listOf("/proc/mounts", "/proc/self/mounts")
-        for (mountFile in mountFiles) {
+        // Strategy 1+2: /proc/mounts
+        for (mountFile in listOf("/proc/mounts", "/proc/self/mounts")) {
             try {
                 File(mountFile).forEachLine { line ->
-                    val parts = line.trim().split(Regex("\\s+"))
-                    if (parts.size >= 3) {
-                        val blk = parts[0]
-                        val mnt = parts[1]
-                        val fs = parts[2]
-                        if (isExternalMount(mnt, fs) && seenMountPoints.add(mnt)) {
-                            result.add(UsbMountInfo(blk, mnt, fs))
-                            Timber.v("Mount from $mountFile: $mnt ($fs)")
-                        }
-                    }
+                    val p = line.trim().split(Regex("\\s+"))
+                    if (p.size >= 3 && isExternalMount(p[1], p[2]) && seen.add(p[1]))
+                        result.add(UsbMountInfo(p[0], p[1], p[2]))
                 }
                 if (result.isNotEmpty()) break
-            } catch (e: Exception) {
-                Timber.w("Cannot read $mountFile: ${e.message}")
-            }
-        }
-
-        // Stratégie 3 : scan /storage/ pour XXXX-XXXX
-        scanStorageDir("/storage", result, seenMountPoints)
-
-        // Stratégie 4 : /mnt/media_rw/
-        scanStorageDir("/mnt/media_rw", result, seenMountPoints)
-
-        // Stratégie 5 : /mnt/usb_storage/ (OEM Samsung, Xiaomi, etc.)
-        scanStorageDir("/mnt/usb_storage", result, seenMountPoints)
-
-        // Stratégie 6 : /mnt/ext_sd/, /mnt/sdcard2/, /mnt/external_sd/
-        listOf("/mnt/ext_sd", "/mnt/sdcard2", "/mnt/external_sd", "/mnt/usb").forEach { dir ->
-            try {
-                val f = File(dir)
-                if (f.exists() && f.isDirectory && f.canRead() && seenMountPoints.add(dir)) {
-                    result.add(UsbMountInfo("vold", dir, "vfat"))
-                    Timber.v("OEM mount dir found: $dir")
-                }
             } catch (_: Exception) {}
         }
 
-        Timber.d("Total external mount points found: ${result.size}")
+        // Strategy 3-6: storage scan
+        for (root in listOf("/storage", "/mnt/media_rw", "/mnt/usb_storage")) {
+            scanDir(root, result, seen)
+        }
+        for (dir in listOf("/mnt/ext_sd", "/mnt/sdcard2", "/mnt/external_sd", "/mnt/usb")) {
+            try {
+                val f = File(dir)
+                if (f.exists() && f.isDirectory && f.canRead() && seen.add(dir))
+                    result.add(UsbMountInfo("vold", dir, "vfat"))
+            } catch (_: Exception) {}
+        }
         return result
     }
 
-    private fun scanStorageDir(
-        rootPath: String,
-        result: MutableList<UsbMountInfo>,
-        seen: MutableSet<String>
-    ) {
+    private fun scanDir(root: String, result: MutableList<UsbMountInfo>, seen: MutableSet<String>) {
         try {
-            File(rootPath).listFiles()
-                ?.filter { dir ->
-                    dir.isDirectory && dir.canRead() &&
-                    !dir.name.equals("emulated", ignoreCase = true) &&
-                    !dir.name.equals("self", ignoreCase = true) &&
-                    dir.name != "0"
-                }
+            File(root).listFiles()
+                ?.filter { it.isDirectory && it.canRead() &&
+                    !it.name.equals("emulated", true) &&
+                    !it.name.equals("self", true) && it.name != "0" }
                 ?.forEach { dir ->
                     val path = dir.absolutePath
-                    if (seen.add(path)) {
-                        val fs = guessFsTypeFromPath(path)
-                        result.add(UsbMountInfo("vold", path, fs))
-                        Timber.v("Storage scan found: $path ($fs)")
-                    }
+                    if (seen.add(path)) result.add(UsbMountInfo("vold", path, "vfat"))
                 }
-        } catch (e: Exception) {
-            Timber.v("Cannot scan $rootPath: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
-    /**
-     * Détermine si un point de montage est un périphérique externe USB/SD.
-     */
-    private fun isExternalMount(mountPath: String, fsType: String): Boolean {
-        val externalPrefixes = listOf(
-            "/storage/", "/mnt/media_rw/", "/mnt/usb", "/mnt/ext",
-            "/mnt/sdcard", "/mnt/external", "/mnt/usb_storage"
-        )
-        val isExternalPath = externalPrefixes.any { mountPath.startsWith(it) }
-        if (!isExternalPath) return false
-
-        if (mountPath.contains("/emulated")) return false
-        if (mountPath == "/storage/emulated") return false
-
-        val usbFileSystems = setOf(
-            "vfat", "exfat", "fuseblk", "ntfs", "ufsd", "texfat", "sdfat",
-            "fuse", "ext2", "ext3", "ext4", "f2fs", "hfsplus", "iso9660",
-            "udf", "nfs", "fat32", "msdos"
-        )
-        return fsType.lowercase() in usbFileSystems ||
-               mountPath.matches(Regex(".*/[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}.*"))
+    private fun isExternalMount(mnt: String, fs: String): Boolean {
+        val prefixes = listOf("/storage/", "/mnt/media_rw/", "/mnt/usb", "/mnt/ext", "/mnt/sdcard", "/mnt/external")
+        if (!prefixes.any { mnt.startsWith(it) }) return false
+        if (mnt.contains("/emulated") || mnt == "/storage/emulated") return false
+        val usbFs = setOf("vfat","exfat","fuseblk","ntfs","ufsd","texfat","sdfat","fuse",
+            "ext2","ext3","ext4","f2fs","hfsplus","iso9660","udf","fat32","msdos")
+        return fs.lowercase() in usbFs || mnt.matches(Regex(".*/[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}.*"))
     }
 
-    /**
-     * Associe un UsbDevice à son point de montage.
-     * Stratégies dans l'ordre :
-     *   1. Sysfs (bus/device numbers → block device → /proc/mounts)
-     *   2. Single device heuristic (1 USB, 1 mont = ça correspond)
-     *   3. Première entrée disponible (best effort)
-     */
     private fun matchDeviceToMount(device: UsbDevice, mounts: List<UsbMountInfo>): UsbMountInfo? {
         if (mounts.isEmpty()) return null
-
-        // Stratégie 1: Sysfs
-        val sysfsMatch = tryMatchViaSysfs(device, mounts)
-        if (sysfsMatch != null) return sysfsMatch
-
-        // Stratégie 2: Seul périphérique USB = seul point de montage
-        val massStorageCount = usbManager.deviceList.values.count { isMassStorageDevice(it) }
-        if (massStorageCount == 1 && mounts.size == 1) {
-            Timber.d("Single USB+single mount → assigning ${mounts.first().mountPoint}")
-            return mounts.first()
+        val sysfs = tryMatchViaSysfs(device, mounts)
+        if (sysfs != null) return sysfs
+        val massCount = usbManager.deviceList.values.count { isMassStorageDevice(it) }
+        if (massCount == 1 && mounts.size == 1) return mounts.first()
+        if (massCount == 1 && mounts.size > 1) {
+            return mounts.firstOrNull { m ->
+                try { StatFs(m.mountPoint).blockCountLong > 0 } catch (_: Exception) { false }
+            } ?: mounts.first()
         }
-
-        // Stratégie 3: Un seul USB, plusieurs mounts → prendre le premier qui a de l'espace
-        if (massStorageCount == 1 && mounts.size > 1) {
-            val withSpace = mounts.firstOrNull { mount ->
-                try {
-                    val stat = StatFs(mount.mountPoint)
-                    stat.blockCountLong > 0
-                } catch (_: Exception) { false }
-            }
-            if (withSpace != null) {
-                Timber.d("Single USB, found mount with space: ${withSpace.mountPoint}")
-                return withSpace
-            }
-            return mounts.first()
-        }
-
         return null
     }
 
     private fun tryMatchViaSysfs(device: UsbDevice, mounts: List<UsbMountInfo>): UsbMountInfo? {
         return try {
-            // device.deviceName = "/dev/bus/usb/001/002"
             val parts = device.deviceName.split("/")
             val busNum = parts.getOrNull(4)?.trimStart('0')?.ifEmpty { "0" }?.toIntOrNull() ?: return null
             val devNum = parts.getOrNull(5)?.trimStart('0')?.ifEmpty { "0" }?.toIntOrNull() ?: return null
-
             val sysfsDir = File("/sys/bus/usb/devices/").listFiles()?.firstOrNull { dir ->
                 try {
                     File("${dir.absolutePath}/busnum").readText().trim().toInt() == busNum &&
                     File("${dir.absolutePath}/devnum").readText().trim().toInt() == devNum
                 } catch (_: Exception) { false }
             } ?: return null
-
             var blockName: String? = null
-            sysfsDir.walkTopDown().maxDepth(10).forEach { file ->
-                if (file.name == "block" && file.isDirectory && blockName == null) {
-                    blockName = file.listFiles()?.firstOrNull()?.name
-                }
+            sysfsDir.walkTopDown().maxDepth(10).forEach { f ->
+                if (f.name == "block" && f.isDirectory && blockName == null)
+                    blockName = f.listFiles()?.firstOrNull()?.name
             }
-
-            if (blockName == null) return null
-            Timber.v("Sysfs block device for ${device.deviceName}: $blockName")
-
-            mounts.firstOrNull { mount ->
-                mount.blockDevice.contains(blockName!!) ||
-                mount.blockDevice.endsWith("/$blockName") ||
-                mount.blockDevice.endsWith("/${blockName}1") ||
-                mount.blockDevice.endsWith("/${blockName}p1") ||
-                mount.blockDevice == "/dev/$blockName" ||
-                mount.blockDevice == "/dev/${blockName}1"
+            blockName ?: return null
+            mounts.firstOrNull { m ->
+                m.blockDevice.contains(blockName!!) ||
+                m.blockDevice == "/dev/$blockName" ||
+                m.blockDevice == "/dev/${blockName}1"
             }
-        } catch (e: Exception) {
-            Timber.v("Sysfs matching failed: ${e.message}")
-            null
-        }
+        } catch (_: Exception) { null }
     }
 
     // ─── Block device discovery ───────────────────────────────────────────────
 
-    /**
-     * Trouve le bloc device (/dev/sdX) associé à un UsbDevice via sysfs.
-     * Retourne null si non trouvé (Android sans root l'empêche souvent).
-     */
     private fun findBlockDeviceForUsb(device: UsbDevice): String? {
         return try {
             val parts = device.deviceName.split("/")
             val busNum = parts.getOrNull(4)?.trimStart('0')?.ifEmpty { "0" }?.toIntOrNull() ?: return null
             val devNum = parts.getOrNull(5)?.trimStart('0')?.ifEmpty { "0" }?.toIntOrNull() ?: return null
-
             val sysfsDir = File("/sys/bus/usb/devices/").listFiles()?.firstOrNull { dir ->
                 try {
                     File("${dir.absolutePath}/busnum").readText().trim().toInt() == busNum &&
                     File("${dir.absolutePath}/devnum").readText().trim().toInt() == devNum
                 } catch (_: Exception) { false }
             } ?: return null
-
             var blockName: String? = null
-            sysfsDir.walkTopDown().maxDepth(10).forEach { file ->
-                if (file.name == "block" && file.isDirectory && blockName == null) {
-                    blockName = file.listFiles()?.firstOrNull()?.name
-                }
+            sysfsDir.walkTopDown().maxDepth(10).forEach { f ->
+                if (f.name == "block" && f.isDirectory && blockName == null)
+                    blockName = f.listFiles()?.firstOrNull()?.name
             }
-
             blockName?.let { "/dev/$it" }
-        } catch (e: Exception) {
-            Timber.v("findBlockDevice failed: ${e.message}")
-            null
-        }
+        } catch (_: Exception) { null }
     }
 
-    /**
-     * Essaie de monter un bloc device avec toutes les stratégies disponibles.
-     * Android sans root ne peut pas monter directement, mais on essaie quand même.
-     */
+    // ─── Mount with Shizuku/shell ─────────────────────────────────────────────
+
     private suspend fun tryMountBlockDevice(
         deviceId: String,
         device: UsbDevice,
         blockDevice: String
     ): DiskOperationResult {
-        // Détecter le type de filesystem via superblock
         val detectedFs = detectFilesystem(blockDevice)
-        Timber.d("Detected filesystem for $blockDevice: $detectedFs")
+        val kernelFs = getSupportedFilesystems()
+        Timber.d("Detected FS: $detectedFs, privileged=${commandRunner.hasPrivilegedAccess}")
 
-        // Vérifier si le kernel supporte ce FS
-        val kernelFsList = getSupportedFilesystems()
-        Timber.d("Kernel filesystems: $kernelFsList")
-
-        // Construire la liste des points de montage à essayer
         val mountPoints = listOf(
             "/storage/${blockDevice.substringAfterLast('/')}",
             "/mnt/usb/${blockDevice.substringAfterLast('/')}",
             "/mnt/media_rw/${blockDevice.substringAfterLast('/')}"
         )
+        val mountCmds = buildMountCommands(blockDevice, detectedFs, kernelFs)
 
-        // Construire la liste des commandes de montage à essayer
-        val mountCommands = buildMountCommands(blockDevice, detectedFs, kernelFsList)
-
-        for (mountPoint in mountPoints) {
-            try { File(mountPoint).mkdirs() } catch (_: Exception) {}
-
-            for (cmd in mountCommands) {
-                val fullCmd = "$cmd \"$mountPoint\" 2>&1"
-                Timber.d("Trying: $fullCmd")
-                val result = executeShellCommand(fullCmd)
-
+        for (mp in mountPoints) {
+            try { File(mp).mkdirs() } catch (_: Exception) {}
+            for (cmd in mountCmds) {
+                val full = "$cmd \"$mp\" 2>&1"
+                val result = commandRunner.run(full, forcePrivileged = false)
                 if (result.isSuccess) {
-                    // Vérifier que c'est vraiment monté
-                    val mounts = findAllMountPoints()
-                    val mountInfo = mounts.firstOrNull { it.mountPoint == mountPoint }
-                        ?: mounts.firstOrNull { it.blockDevice.contains(blockDevice) }
-
-                    if (mountInfo != null || File(mountPoint).list()?.isNotEmpty() == true) {
-                        val actualMount = mountInfo?.mountPoint ?: mountPoint
-                        updateDeviceMountState(deviceId, actualMount, true)
-                        val (total, free) = getSpaceInfo(actualMount)
-                        updateDeviceSpaceInfo(deviceId, total, free, detectedFs ?: "unknown")
-                        createAppDirectoriesOnDevice(actualMount)
+                    val updatedMounts = findAllMountPoints()
+                    val found = updatedMounts.firstOrNull { it.mountPoint == mp }
+                        ?: updatedMounts.firstOrNull { it.blockDevice.contains(blockDevice) }
+                    val actualMp = found?.mountPoint ?: mp
+                    val (total, free) = getSpaceInfo(actualMp)
+                    if (total > 0) {
+                        updateDeviceState(deviceId, actualMp, true, total, free, detectedFs ?: "vfat")
+                        createAppDirectories(actualMp)
                         return DiskOperationResult.Success(
-                            "✓ Monté sur $actualMount\n" +
-                            "Système: ${detectedFs?.uppercase() ?: "Inconnu"}\n" +
-                            "Total: ${formatBytes(total)}  •  Libre: ${formatBytes(free)}"
+                            "✓ Monté sur $actualMp\n" +
+                            "Système: ${detectedFs?.uppercase() ?: "Auto"}\n" +
+                            "Total: ${fmtBytes(total)}  •  Libre: ${fmtBytes(free)}\n" +
+                            "Shizuku: ${if (commandRunner.hasPrivilegedAccess) "Actif" else "Non actif"}"
                         )
                     }
                 }
             }
         }
 
-        // Rien n'a marché → informer l'utilisateur clairement
-        val fsInfo = if (detectedFs != null) "Filesystem détecté: ${detectedFs.uppercase()}" else ""
-        val supported = if (detectedFs != null && kernelFsList.isNotEmpty()) {
-            if (kernelFsList.any { it.contains(detectedFs, ignoreCase = true) })
-                "✓ Supporté par le kernel"
-            else
-                "✗ PAS supporté par ce kernel Android\nFormater en FAT32/exFAT pour compatibilité maximale"
+        // Nothing worked — give honest error
+        val fsInfo = if (detectedFs != null) "FS détecté: ${detectedFs.uppercase()}" else ""
+        val supportStatus = if (detectedFs != null && kernelFs.isNotEmpty()) {
+            if (kernelFs.any { it.contains(detectedFs, true) }) "✓ Supporté par ce kernel"
+            else "✗ Non supporté par ce kernel — formater en FAT32/exFAT"
         } else ""
 
         return DiskOperationResult.Error(
-            "Montage impossible sans root.\n\n" +
-            "$fsInfo\n$supported\n\n" +
-            "Le montage de périphériques USB non-FAT32/exFAT\n" +
-            "nécessite les droits root sur Android.\n\n" +
-            "Solution: formater la clé en FAT32 ou exFAT."
+            "Montage impossible.\n$fsInfo\n$supportStatus\n\n" +
+            if (!commandRunner.hasPrivilegedAccess)
+                "Active Shizuku pour monter NTFS/EXT4/F2FS."
+            else "Essayer de débrancher et rebrancher la clé."
         )
     }
 
     /**
-     * Construit la liste des commandes de montage selon le FS détecté
-     * et ce que le kernel supporte.
+     * Build mount command list — Shizuku enables more command types.
      */
     private fun buildMountCommands(
         blockDevice: String,
@@ -635,145 +504,166 @@ class UsbDeviceRepositoryImpl @Inject constructor(
         val cmds = mutableListOf<String>()
         val partitions = listOf("${blockDevice}1", "${blockDevice}p1", blockDevice)
 
-        for (partition in partitions) {
+        for (part in partitions) {
             when (detectedFs?.lowercase()) {
                 "ntfs" -> {
-                    cmds.add("ntfs-3g -o rw,big_writes $partition")
-                    cmds.add("mount -t ntfs-3g -o rw $partition")
-                    cmds.add("mount -t ntfs $partition")
-                    cmds.add("mount -t fuseblk -o rw,allow_other $partition")
+                    if (commandRunner.hasPrivilegedAccess) {
+                        cmds.add("ntfs-3g -o rw,big_writes,allow_other $part")
+                        cmds.add("mount -t ntfs-3g -o rw $part")
+                        cmds.add("mount -t ntfs $part")
+                        cmds.add("mount -t fuseblk -o rw,allow_other $part")
+                    }
                 }
                 "exfat" -> {
-                    cmds.add("mount -t exfat -o rw,uid=0,gid=0 $partition")
-                    cmds.add("mount -t texfat -o rw $partition")
-                    cmds.add("mount -t fuse.exfat -o rw $partition")
-                    cmds.add("mount -t sdcardfs -o rw $partition")
+                    cmds.add("mount -t exfat -o rw,uid=0,gid=0 $part")
+                    cmds.add("mount -t texfat -o rw $part")
+                    if (commandRunner.hasPrivilegedAccess) {
+                        cmds.add("mount -t fuse.exfat -o rw $part")
+                    }
                 }
                 "ext4" -> {
-                    cmds.add("mount -t ext4 -o rw,noatime $partition")
-                    cmds.add("mount -t ext4 $partition")
+                    if (commandRunner.hasPrivilegedAccess) {
+                        cmds.add("mount -t ext4 -o rw,noatime $part")
+                        cmds.add("mount -t ext4 $part")
+                    }
                 }
-                "ext3" -> cmds.add("mount -t ext3 -o rw,noatime $partition")
-                "ext2" -> cmds.add("mount -t ext2 -o rw,noatime $partition")
-                "f2fs" -> cmds.add("mount -t f2fs -o rw $partition")
-                "hfsplus" -> cmds.add("mount -t hfsplus -o rw $partition")
+                "ext3" -> if (commandRunner.hasPrivilegedAccess) cmds.add("mount -t ext3 -o rw,noatime $part")
+                "ext2" -> if (commandRunner.hasPrivilegedAccess) cmds.add("mount -t ext2 -o rw $part")
+                "f2fs" -> if (commandRunner.hasPrivilegedAccess) cmds.add("mount -t f2fs -o rw $part")
                 else -> {
-                    // Inconnu → essayer tous les types courants
-                    cmds.add("mount -t vfat -o rw,uid=0,gid=0 $partition")
-                    cmds.add("mount -t exfat -o rw,uid=0,gid=0 $partition")
-                    cmds.add("mount -o rw $partition")
+                    cmds.add("mount -t vfat -o rw,uid=0,gid=0 $part")
+                    cmds.add("mount -t exfat -o rw,uid=0,gid=0 $part")
+                    cmds.add("mount -o rw $part")
                 }
             }
-            // Toujours essayer vfat comme fallback (le plus compatible)
+            // FAT32 always as last-resort
             if (detectedFs?.lowercase() != "vfat") {
-                cmds.add("mount -t vfat -o rw,uid=0,gid=0,fmask=0000,dmask=0000 $partition")
+                cmds.add("mount -t vfat -o rw,uid=0,gid=0,fmask=0000,dmask=0000 $part")
             }
         }
-
         return cmds
     }
 
+    // ─── Filesystem detection via Shizuku + fallback ──────────────────────────
+
     /**
-     * Détecte le type de filesystem en lisant le superblock du périphérique.
-     * Utilise blkid si disponible, sinon lecture directe des octets magiques.
+     * Detect filesystem type. With Shizuku: blkid is reliable.
+     * Fallback: magic bytes.
      */
     private suspend fun detectFilesystem(blockDevice: String): String? {
-        // Essayer blkid d'abord (le plus précis)
-        val blkidResult = executeShellCommand("blkid $blockDevice 2>/dev/null")
-        if (blkidResult.isSuccess && blkidResult.output.isNotEmpty()) {
-            val typeMatch = Regex("TYPE=\"([^\"]+)\"").find(blkidResult.output)
-            if (typeMatch != null) {
-                val fs = typeMatch.groupValues[1]
-                Timber.d("blkid detected: $fs")
-                return fs
+        // Try blkid (needs privileged access usually, but some ROMs allow it)
+        val blkid = commandRunner.run("blkid $blockDevice 2>/dev/null")
+        if (blkid.isSuccess && blkid.output.isNotEmpty()) {
+            val match = Regex("TYPE=\"([^\"]+)\"").find(blkid.output)
+            if (match != null) return match.groupValues[1].also { Timber.d("blkid: $it") }
+        }
+
+        // Try 'file -s' (Shizuku may allow it)
+        val fileCmd = commandRunner.run("file -s $blockDevice 2>/dev/null")
+        if (fileCmd.isSuccess && fileCmd.output.isNotEmpty()) {
+            val out = fileCmd.output.lowercase()
+            when {
+                "ntfs" in out -> return "ntfs"
+                "exfat" in out || "extended fat" in out -> return "exfat"
+                "fat" in out -> return "vfat"
+                "ext4" in out -> return "ext4"
+                "ext3" in out -> return "ext3"
+                "f2fs" in out -> return "f2fs"
             }
         }
 
-        // Fallback: file command
-        val fileResult = executeShellCommand("file -s $blockDevice 2>/dev/null")
-        if (fileResult.isSuccess) {
-            val out = fileResult.output.lowercase()
-            return when {
-                "ntfs" in out -> "ntfs"
-                "exfat" in out || "extended fat" in out -> "exfat"
-                "fat" in out || "fat32" in out -> "vfat"
-                "ext4" in out -> "ext4"
-                "ext3" in out -> "ext3"
-                "ext2" in out -> "ext2"
-                "f2fs" in out -> "f2fs"
-                else -> null
-            }
-        }
-
-        // Fallback: lire les magic bytes du superblock
-        return detectFsViaMagicBytes(blockDevice)
+        // Fallback: superblock magic bytes (no privilege needed)
+        return detectViaMagicBytes(blockDevice)
     }
 
     /**
-     * Lit les magic bytes du superblock pour identifier le filesystem.
-     * Fonctionne même sans root sur beaucoup de devices.
+     * With Shizuku: run lsblk to enumerate all partitions on the disk.
+     * Returns list of PartitionInfo or empty list if unavailable.
      */
-    private fun detectFsViaMagicBytes(blockDevice: String): String? {
+    private suspend fun getPartitionsForDevice(blockDevice: String): List<PartitionInfo> {
+        if (!commandRunner.hasPrivilegedAccess) return emptyList()
+
+        val lsblk = commandRunner.run(
+            "lsblk -o NAME,FSTYPE,SIZE,LABEL,MOUNTPOINT -n -l $blockDevice 2>/dev/null"
+        )
+        if (!lsblk.isSuccess || lsblk.output.isEmpty()) return emptyList()
+
+        return lsblk.output.lines()
+            .filter { it.isNotBlank() }
+            .mapIndexed { idx, line ->
+                val cols = line.trim().split(Regex("\\s+"))
+                PartitionInfo(
+                    blockDev = "/dev/${cols.getOrElse(0) { "" }}",
+                    fsType = cols.getOrElse(1) { "unknown" },
+                    sizeMB = parseSizeToMB(cols.getOrElse(2) { "0" }),
+                    label = cols.getOrElse(3) { "" },
+                    mountPoint = cols.getOrElse(4) { null }.takeIf { it != null && it != "-" }
+                )
+            }
+            .filter { it.blockDev.isNotBlank() }
+    }
+
+    /**
+     * With Shizuku: run fdisk -l to get partition table.
+     */
+    private suspend fun getDiskInfo(blockDevice: String): String {
+        if (!commandRunner.hasPrivilegedAccess) return ""
+        val result = commandRunner.run("fdisk -l $blockDevice 2>/dev/null")
+        return if (result.isSuccess) result.output else ""
+    }
+
+    private fun parseSizeToMB(sizeStr: String): Long {
         return try {
-            val partitions = listOf("${blockDevice}1", "${blockDevice}p1", blockDevice)
-            for (part in partitions) {
-                val file = java.io.RandomAccessFile(part, "r")
-                val magic = ByteArray(16)
-                try {
-                    // FAT32: bytes 3-10 = "FAT32   "
-                    file.seek(3)
-                    file.read(magic, 0, 8)
-                    if (String(magic, 0, 5) == "FAT32") return "vfat"
-                    if (String(magic, 0, 5) == "FAT16") return "vfat"
-
-                    // exFAT: bytes 3-10 = "EXFAT   "
-                    if (String(magic, 0, 5) == "EXFAT") return "exfat"
-
-                    // NTFS: bytes 3-10 = "NTFS    "
-                    if (String(magic, 0, 4) == "NTFS") return "ntfs"
-
-                    // EXT2/3/4: magic at offset 0x438 = 0xEF53
-                    file.seek(0x438)
-                    val extMagic = ByteArray(2)
-                    file.read(extMagic)
-                    if (extMagic[0] == 0x53.toByte() && extMagic[1] == 0xEF.toByte()) {
-                        // EXT2/3/4 — différencier via le journal et les features
-                        file.seek(0x45C) // s_rev_level
-                        val rev = ByteArray(4)
-                        file.read(rev)
-                        return "ext4" // Approximation (ext2/3/4 ont même magic)
-                    }
-                } finally {
-                    file.close()
-                }
+            val n = sizeStr.dropLast(1).toLong()
+            when (sizeStr.last().uppercaseChar()) {
+                'T' -> n * 1024 * 1024
+                'G' -> n * 1024
+                'M' -> n
+                'K' -> n / 1024
+                else -> n
             }
-            null
-        } catch (e: Exception) {
-            Timber.v("Magic bytes detection failed: ${e.message}")
-            null
-        }
+        } catch (_: Exception) { 0L }
     }
 
-    /**
-     * Lit /proc/filesystems pour savoir ce que le kernel supporte.
-     */
+    private fun detectViaMagicBytes(blockDevice: String): String? {
+        return try {
+            for (part in listOf("${blockDevice}1", "${blockDevice}p1", blockDevice)) {
+                try {
+                    val raf = RandomAccessFile(part, "r")
+                    val magic = ByteArray(16)
+                    raf.use {
+                        it.seek(3); it.read(magic, 0, 8)
+                        val s = String(magic, 0, 5)
+                        when {
+                            s.startsWith("FAT32") || s.startsWith("FAT16") -> return "vfat"
+                            s.startsWith("EXFAT") -> return "exfat"
+                            s.startsWith("NTFS") -> return "ntfs"
+                        }
+                        it.seek(0x438)
+                        val extMagic = ByteArray(2)
+                        it.read(extMagic)
+                        if (extMagic[0] == 0x53.toByte() && extMagic[1] == 0xEF.toByte())
+                            return "ext4"
+                    }
+                } catch (_: Exception) {}
+            }
+            null
+        } catch (_: Exception) { null }
+    }
+
     private fun getSupportedFilesystems(): List<String> {
         return try {
-            File("/proc/filesystems")
-                .readLines()
+            File("/proc/filesystems").readLines()
                 .map { it.trim().removePrefix("nodev").trim() }
                 .filter { it.isNotEmpty() }
-        } catch (e: Exception) {
-            Timber.v("Cannot read /proc/filesystems: ${e.message}")
-            emptyList()
-        }
+        } catch (_: Exception) { emptyList() }
     }
 
     // ─── Space info ──────────────────────────────────────────────────────────
 
     /**
-     * Lit la taille totale et libre via StatFs (uniquement sur le mount point, pas le bloc device).
-     * Essaie aussi les partitions si le premier essai échoue.
+     * Get disk space. Tries StatFs first (no privilege needed),
+     * falls back to 'df' via Shizuku.
      */
     private fun getSpaceInfo(mountPoint: String?): Pair<Long, Long> {
         if (mountPoint == null) return Pair(0L, 0L)
@@ -782,112 +672,88 @@ class UsbDeviceRepositoryImpl @Inject constructor(
             val total = stat.blockCountLong * stat.blockSizeLong
             val free = stat.availableBlocksLong * stat.blockSizeLong
             if (total > 0) {
-                Timber.d("StatFs($mountPoint): total=${formatBytes(total)}, free=${formatBytes(free)}")
-                return Pair(total, free)
-            }
-            Pair(0L, 0L)
+                Timber.d("StatFs($mountPoint): ${fmtBytes(total)}, free=${fmtBytes(free)}")
+                Pair(total, free)
+            } else Pair(0L, 0L)
         } catch (e: Exception) {
             Timber.w("StatFs failed on $mountPoint: ${e.message}")
             Pair(0L, 0L)
         }
     }
 
-    // ─── Filesystem naming ───────────────────────────────────────────────────
+    // ─── Formatting ──────────────────────────────────────────────────────────
 
-    private fun guessFsTypeFromPath(path: String): String {
-        // On ne peut pas savoir avec certitude depuis le chemin seul
-        return "vfat"
+    private fun buildFormatCommand(blockDevice: String, fs: String, label: String): String {
+        val lbl = if (label.isNotEmpty()) "-n \"$label\"" else ""
+        return when (fs.uppercase()) {
+            "FAT32" -> "mkfs.vfat -F 32 $lbl $blockDevice"
+            "EXFAT" -> "mkfs.exfat $lbl $blockDevice"
+            "NTFS" -> "mkfs.ntfs --fast $lbl $blockDevice"
+            "EXT4" -> "mkfs.ext4 -F $lbl $blockDevice"
+            "EXT3" -> "mkfs.ext3 -F $lbl $blockDevice"
+            else -> "mkfs.vfat -F 32 $blockDevice"
+        }
     }
 
-    private fun normalizeFsType(raw: String): String = when (raw.lowercase()) {
-        "vfat", "fat", "fat32", "msdos" -> "FAT32"
-        "fuseblk", "exfat", "texfat", "sdfat" -> "exFAT"
-        "ntfs", "ufsd" -> "NTFS"
-        "ext4" -> "EXT4"
-        "ext3" -> "EXT3"
-        "ext2" -> "EXT2"
-        "f2fs" -> "F2FS"
-        "hfsplus" -> "HFS+"
-        "iso9660" -> "ISO9660"
-        "udf" -> "UDF"
-        else -> raw.uppercase()
-    }
+    // ─── App directories ─────────────────────────────────────────────────────
 
-    // ─── App directory setup ──────────────────────────────────────────────────
-
-    /**
-     * Crée les dossiers de l'app à la racine de la clé USB.
-     * Visible dans l'explorateur de fichiers de l'utilisateur.
-     *   {mountPoint}/UsbDiskManager/
-     *   {mountPoint}/UsbDiskManager/Logs/
-     *   {mountPoint}/UsbDiskManager/Backups/
-     */
-    private fun createAppDirectoriesOnDevice(mountPoint: String) {
+    private fun createAppDirectories(mountPoint: String) {
         try {
             val appDir = File(mountPoint, "UsbDiskManager")
             if (appDir.mkdirs() || appDir.exists()) {
                 File(appDir, "Logs").mkdirs()
                 File(appDir, "Backups").mkdirs()
-                Timber.d("App dirs created/verified at: ${appDir.absolutePath}")
-            } else {
-                Timber.w("Cannot create app dir at: ${appDir.absolutePath} (read-only?)")
             }
         } catch (e: Exception) {
             Timber.w("App dir creation failed: ${e.message}")
         }
     }
 
-    // ─── State updates ───────────────────────────────────────────────────────
+    // ─── State helpers ───────────────────────────────────────────────────────
 
-    private fun updateDeviceMountState(deviceId: String, mountPoint: String?, isMounted: Boolean) {
-        val current = _connectedDevices.value.toMutableList()
-        val index = current.indexOfFirst { it.id == deviceId }
-        if (index >= 0) {
-            current[index] = current[index].copy(
+    private fun updateDeviceState(
+        deviceId: String, mountPoint: String?, mounted: Boolean,
+        total: Long, free: Long, fsType: String
+    ) {
+        _connectedDevices.value = _connectedDevices.value.map { d ->
+            if (d.id == deviceId) d.copy(
                 mountPoint = mountPoint,
-                isMounted = isMounted,
-                isWritable = isMounted && mountPoint != null && File(mountPoint).canWrite()
-            )
-            _connectedDevices.value = current
-        }
-    }
-
-    private fun updateDeviceSpaceInfo(deviceId: String, total: Long, free: Long, fsType: String) {
-        val current = _connectedDevices.value.toMutableList()
-        val index = current.indexOfFirst { it.id == deviceId }
-        if (index >= 0) {
-            current[index] = current[index].copy(
+                isMounted = mounted,
+                isWritable = mounted && mountPoint != null && File(mountPoint).canWrite(),
                 totalSpace = total,
                 freeSpace = free,
                 usedSpace = total - free,
                 fileSystem = FileSystemType.fromString(normalizeFsType(fsType))
-            )
-            _connectedDevices.value = current
+            ) else d
         }
     }
 
-    // ─── Format helpers ──────────────────────────────────────────────────────
-
-    private fun buildFormatCommand(blockDevice: String, fileSystem: String, label: String): String {
-        val labelFlag = if (label.isNotEmpty()) "-n \"$label\"" else ""
-        return when (fileSystem.uppercase()) {
-            "FAT32" -> "mkfs.vfat -F 32 $labelFlag $blockDevice"
-            "EXFAT" -> "mkfs.exfat $labelFlag $blockDevice"
-            "NTFS" -> "mkfs.ntfs --fast $labelFlag $blockDevice"
-            "EXT4" -> "mkfs.ext4 -F $labelFlag $blockDevice"
-            "EXT3" -> "mkfs.ext3 -F $labelFlag $blockDevice"
-            else -> "mkfs.vfat -F 32 $blockDevice"
+    private fun updateDeviceMountState(deviceId: String, mountPoint: String?, mounted: Boolean) {
+        _connectedDevices.value = _connectedDevices.value.map { d ->
+            if (d.id == deviceId) d.copy(
+                mountPoint = mountPoint,
+                isMounted = mounted,
+                isWritable = mounted && mountPoint != null && File(mountPoint).canWrite()
+            ) else d
         }
     }
 
     // ─── Utility ─────────────────────────────────────────────────────────────
 
-    private fun formatBytes(bytes: Long): String {
+    private fun normalizeFsType(raw: String): String = when (raw.lowercase()) {
+        "vfat","fat","fat32","msdos" -> "FAT32"
+        "fuseblk","exfat","texfat","sdfat" -> "exFAT"
+        "ntfs","ufsd" -> "NTFS"
+        "ext4" -> "EXT4"; "ext3" -> "EXT3"; "ext2" -> "EXT2"
+        "f2fs" -> "F2FS"; "hfsplus" -> "HFS+"; "iso9660" -> "ISO9660"
+        else -> raw.uppercase()
+    }
+
+    private fun fmtBytes(bytes: Long): String {
         if (bytes <= 0) return "0 B"
-        val units = arrayOf("B", "KB", "MB", "GB", "TB")
-        var value = bytes.toDouble()
-        var unit = 0
-        while (value >= 1024 && unit < units.size - 1) { value /= 1024; unit++ }
-        return "%.1f %s".format(value, units[unit])
+        val units = arrayOf("B","KB","MB","GB","TB")
+        var v = bytes.toDouble(); var u = 0
+        while (v >= 1024 && u < units.size - 1) { v /= 1024; u++ }
+        return "%.1f %s".format(v, units[u])
     }
 }

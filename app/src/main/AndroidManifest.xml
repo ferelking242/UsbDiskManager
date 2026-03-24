@@ -21,6 +21,9 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Shizuku pre-v11 API permission -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+
     <application
         android:name=".UsbDiskManagerApp"
         android:allowBackup="true"
@@ -51,7 +54,15 @@
                 android:resource="@xml/device_filter" />
         </activity>
 
-        <!-- USB permission broadcast receiver (manifest-registered) -->
+        <!-- Shizuku provider — required for Shizuku API v11+ -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
         <receiver
             android:name=".usb.UsbBroadcastReceiver"
             android:exported="false">
