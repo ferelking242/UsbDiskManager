@@ -580,7 +580,7 @@ class UsbDeviceRepositoryImpl @Inject constructor(
      * With Shizuku: run lsblk to enumerate all partitions on the disk.
      * Returns list of PartitionInfo or empty list if unavailable.
      */
-    suspend fun getPartitionsForDevice(blockDevice: String): List<PartitionInfo> {
+    private suspend fun getPartitionsForDevice(blockDevice: String): List<PartitionInfo> {
         if (!commandRunner.hasPrivilegedAccess) return emptyList()
 
         val lsblk = commandRunner.run(
@@ -606,7 +606,7 @@ class UsbDeviceRepositoryImpl @Inject constructor(
     /**
      * With Shizuku: run fdisk -l to get partition table.
      */
-    suspend fun getDiskInfo(blockDevice: String): String {
+    private suspend fun getDiskInfo(blockDevice: String): String {
         if (!commandRunner.hasPrivilegedAccess) return ""
         val result = commandRunner.run("fdisk -l $blockDevice 2>/dev/null")
         return if (result.isSuccess) result.output else ""
