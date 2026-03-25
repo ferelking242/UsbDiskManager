@@ -21,20 +21,22 @@ class IsoScanner @Inject constructor(
 ) {
 
     companion object {
+        private const val APP_ROOT = "usbdiskmanager"
+        private const val MODULE_DIR = "PS2Manager"
+
+        val BASE_DIR: String
+            get() = "${Environment.getExternalStorageDirectory()}/$APP_ROOT/$MODULE_DIR"
+
         val DEFAULT_ISO_DIR: String
-            get() = "${Environment.getExternalStorageDirectory()}/PS2Manager/ISO"
+            get() = "$BASE_DIR/ISO"
 
         val DEFAULT_UL_DIR: String
-            get() = "${Environment.getExternalStorageDirectory()}/PS2Manager/UL"
+            get() = "$BASE_DIR/UL"
 
         val DEFAULT_ART_DIR: String
-            get() = "${Environment.getExternalStorageDirectory()}/PS2Manager/ART"
+            get() = "$BASE_DIR/ART"
     }
 
-    /**
-     * Scan a list of directory paths for .iso files.
-     * Game metadata is extracted via [IsoEngine] — no direct parser coupling.
-     */
     suspend fun scanDirectories(paths: List<String>): List<Ps2Game> =
         withContext(Dispatchers.IO) {
             val results = mutableListOf<Ps2Game>()
@@ -55,30 +57,20 @@ class IsoScanner @Inject constructor(
             results.sortedBy { it.title }
         }
 
-    /**
-     * Scan a SAF-provided URI by resolving it to a real path.
-     */
     suspend fun scanUri(uri: Uri): List<Ps2Game> =
         withContext(Dispatchers.IO) {
             val path = resolveUriToPath(uri) ?: return@withContext emptyList()
             scanDirectories(listOf(path))
         }
 
-    /**
-     * Create the default PS2Manager folder structure if it doesn't exist.
-     */
     suspend fun ensureStructure(base: String) = withContext(Dispatchers.IO) {
-        listOf("$base/ISO", "$base/UL", "$base/ART").forEach { path ->
+        listOf("$base/ISO", "$base/UL", "$base/ART", "$base/Downloads").forEach { path ->
             val dir = File(path)
             if (!dir.exists()) {
                 Timber.d("Created dir $path: ${dir.mkdirs()}")
             }
         }
     }
-
-    // ────────────────────────────────────────────
-    // Private helpers
-    // ────────────────────────────────────────────
 
     private suspend fun parseIso(file: File): Ps2Game? = try {
         val info = engine.getIsoInfo(file.absolutePath)
