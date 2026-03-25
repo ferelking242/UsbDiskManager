@@ -17,6 +17,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.usbdiskmanager.MainActivity
+import com.usbdiskmanager.R
 import com.usbdiskmanager.usb.api.UsbDeviceRepository
 import dagger.hilt.android.AndroidEntryPoint
 import timber.log.Timber
@@ -25,12 +26,13 @@ import javax.inject.Inject
 /**
  * Persistent foreground service — survives background, never killed.
  *
- * Strategy used (same as Termux):
- *   1. PARTIAL_WAKE_LOCK  → empêche le CPU de dormir pendant les I/O
- *   2. START_STICKY        → Android le redémarre si tué par l'OS
- *   3. Foreground ongoing  → Android ne le tue pas (politique OS)
- *   4. BootReceiver        → redémarre après un reboot du téléphone
- *   5. BroadcastReceiver   → écoute USB attach/detach en direct dans le service
+ * Anti-kill strategy (same as Termux):
+ *   1. PARTIAL_WAKE_LOCK  -- prevents CPU from sleeping during I/O
+ *   2. START_STICKY        -- Android restarts it if killed by OS
+ *   3. Foreground ongoing  -- Android does not kill foreground services
+ *   4. BootReceiver        -- restarts after device reboot
+ *   5. onTaskRemoved       -- reschedules when user swipes app away
+ *   6. BroadcastReceiver   -- listens for USB attach/detach inside the service
  */
 @AndroidEntryPoint
 class UsbMonitorService : Service() {
@@ -93,14 +95,15 @@ class UsbMonitorService : Service() {
         startForegroundCompat(notification)
         usbRepository.refreshConnectedDevices()
 
-        // START_STICKY = Android relance automatiquement le service s'il est tué
+        // START_STICKY: Android automatically restarts the service if killed
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Quand l'utilisateur swipe l'app → relance le service (comme Termux)
+        // When user swipes the app away -> reschedule the service (like Termux)
+        Timber.d("UsbMonitorService: task removed, rescheduling")
         val restartIntent = Intent(applicationContext, UsbMonitorService::class.java)
         restartIntent.`package` = packageName
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -128,7 +131,7 @@ class UsbMonitorService : Service() {
                 "UsbDiskManager::UsbMonitorWakeLock"
             ).apply {
                 setReferenceCounted(false)
-                acquire(/* 12 hours max */ 12 * 60 * 60 * 1000L)
+                acquire(12 * 60 * 60 * 1000L) // 12 hour max
             }
             Timber.d("WakeLock acquired")
         } catch (e: Exception) {
@@ -138,9 +141,7 @@ class UsbMonitorService : Service() {
 
     private fun releaseWakeLock() {
         try {
-            wakeLock?.let {
-                if (it.isHeld) it.release()
-            }
+            wakeLock?.let { if (it.isHeld) it.release() }
             wakeLock = null
             Timber.d("WakeLock released")
         } catch (e: Exception) {
@@ -148,7 +149,7 @@ class UsbMonitorService : Service() {
         }
     }
 
-    // ─── USB BroadcastReceiver interne ────────────────────────────────────────
+    // ─── USB BroadcastReceiver ────────────────────────────────────────────────
 
     private fun registerUsbReceiver() {
         usbReceiver = object : BroadcastReceiver() {
@@ -200,8 +201,11 @@ class UsbMonitorService : Service() {
 
     private fun buildNotification(): Notification {
         val deviceCount = try { usbRepository.connectedDevices.value.size } catch (_: Exception) { 0 }
-        val contentText = if (deviceCount > 0) "$deviceCount périphérique(s) USB connecté(s)"
-                          else "En attente de périphérique USB…"
+        val contentText = if (deviceCount > 0) {
+            resources.getQuantityString(R.plurals.notif_devices_connected_plural, deviceCount, deviceCount)
+        } else {
+            getString(R.string.notif_waiting)
+        }
 
         val openIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -214,7 +218,7 @@ class UsbMonitorService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_upload)
-            .setContentTitle("USB Disk Manager")
+            .setContentTitle(getString(R.string.app_name))
             .setContentText(contentText)
             .setContentIntent(pendingOpen)
             .setOngoing(true)
@@ -249,10 +253,10 @@ class UsbMonitorService : Service() {
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "USB Monitor",
+            getString(R.string.notif_channel_name),
             NotificationManager.IMPORTANCE_MIN
         ).apply {
-            description = "Surveille les périphériques USB en arrière-plan"
+            description = getString(R.string.notif_channel_desc)
             setShowBadge(false)
         }
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
