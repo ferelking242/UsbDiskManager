@@ -5,6 +5,7 @@ import com.usbdiskmanager.core.util.ShellResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
+import rikka.shizuku.ShizukuRemoteProcess
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -40,17 +41,17 @@ class ShizukuCommandRunner @Inject constructor(
             }
         }
 
-    @Suppress("DiscouragedPrivateApi")
-    private fun newShizukuProcess(command: String): Process {
+    @Suppress("INVISIBLE_MEMBER", "INVISIBLE_REFERENCE")
+    private fun newShizukuProcess(command: String): ShizukuRemoteProcess {
         val method = Shizuku::class.java.getDeclaredMethod(
             "newProcess",
             Array<String>::class.java,
             Array<String>::class.java,
             String::class.java
-        )
-        method.isAccessible = true
+        ).also { it.isAccessible = true }
         @Suppress("UNCHECKED_CAST")
-        return method.invoke(null, arrayOf("/system/bin/sh", "-c", command), null, null) as Process
+        return method.invoke(null, arrayOf("/system/bin/sh", "-c", command), null, null)
+            as ShizukuRemoteProcess
     }
 
     private fun runViaShizuku(command: String): ShellResult {
