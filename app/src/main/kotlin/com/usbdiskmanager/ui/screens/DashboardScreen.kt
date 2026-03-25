@@ -1,6 +1,14 @@
 package com.usbdiskmanager.ui.screens
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -8,6 +16,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -16,15 +25,20 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.usbdiskmanager.R
 import com.usbdiskmanager.core.model.DiskDevice
 import com.usbdiskmanager.shizuku.ShizukuState
 import com.usbdiskmanager.viewmodel.DashboardViewModel
@@ -34,12 +48,37 @@ import com.usbdiskmanager.viewmodel.DashboardViewModel
 fun DashboardScreen(
     onDeviceClick: (String) -> Unit,
     onLogsClick: () -> Unit,
+    onSettingsClick: () -> Unit,
     onRequestSafPermission: () -> Unit,
     viewModel: DashboardViewModel = hiltViewModel()
 ) {
     val devices by viewModel.connectedDevices.collectAsStateWithLifecycle()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val shizukuState by viewModel.shizukuState.collectAsStateWithLifecycle()
+    var showShizukuDialog by remember { mutableStateOf(false) }
+
+    // Spinning animation for the refresh icon
+    val infiniteTransition = rememberInfiniteTransition(label = "refresh_spin")
+    val spinAngle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "spin"
+    )
+
+    if (showShizukuDialog) {
+        ShizukuQuickDialog(
+            state = shizukuState,
+            onRequestPermission = {
+                viewModel.requestShizukuPermission()
+                showShizukuDialog = false
+            },
+            onDismiss = { showShizukuDialog = false }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -54,19 +93,33 @@ fun DashboardScreen(
                         )
                         Spacer(Modifier.width(10.dp))
                         Text(
-                            "USB Disk Manager",
+                            stringResource(R.string.dashboard_title),
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
                     }
                 },
                 actions = {
-                    ShizukuStatusIcon(shizukuState)
+                    // Shizuku status button — colored dot shows state at a glance
+                    ShizukuStatusButton(
+                        state = shizukuState,
+                        onClick = { showShizukuDialog = true }
+                    )
+                    // Refresh with spinning animation when loading
                     IconButton(onClick = { viewModel.refreshDevices() }) {
-                        Icon(Icons.Default.Refresh, "Actualiser")
+                        Icon(
+                            Icons.Default.Refresh,
+                            stringResource(R.string.refresh),
+                            modifier = Modifier.rotate(if (uiState.isLoading) spinAngle else 0f)
+                        )
                     }
+                    // Logs
                     IconButton(onClick = onLogsClick) {
-                        Icon(Icons.Default.Terminal, "Logs")
+                        Icon(Icons.Default.Terminal, stringResource(R.string.logs))
+                    }
+                    // Settings
+                    IconButton(onClick = onSettingsClick) {
+                        Icon(Icons.Default.Settings, stringResource(R.string.settings))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -80,13 +133,13 @@ fun DashboardScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            // ── Shizuku status banner ───────────────────────────────────────
+            // ── Shizuku status banner ────────────────────────────────────────
             ShizukuBanner(
                 state = shizukuState,
                 onRequestPermission = { viewModel.requestShizukuPermission() }
             )
 
-            // ── Operation result banner ─────────────────────────────────────
+            // ── Operation result banner ──────────────────────────────────────
             AnimatedVisibility(
                 visible = uiState.errorMessage != null || uiState.operationMessage != null,
                 enter = fadeIn(),
@@ -125,13 +178,13 @@ fun DashboardScreen(
                             onClick = { viewModel.clearError() },
                             modifier = Modifier.size(24.dp)
                         ) {
-                            Icon(Icons.Default.Close, "Fermer", modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.Close, stringResource(R.string.close), modifier = Modifier.size(16.dp))
                         }
                     }
                 }
             }
 
-            // ── Device list ─────────────────────────────────────────────────
+            // ── Device list ──────────────────────────────────────────────────
             if (uiState.isLoading) {
                 Box(
                     Modifier.fillMaxWidth().padding(32.dp),
@@ -161,37 +214,176 @@ fun DashboardScreen(
     }
 }
 
-// ─── Shizuku top-bar icon ─────────────────────────────────────────────────────
+// ─── Shizuku status button (header) ───────────────────────────────────────────
+// Uses a recognizable shield/security icon with a colored status dot.
 
 @Composable
-private fun ShizukuStatusIcon(state: ShizukuState) {
-    val (icon, tint) = when (state) {
-        is ShizukuState.Ready ->
-            Icons.Default.Shield to Color(0xFF4CAF50)
-        is ShizukuState.PermissionNotRequested ->
-            Icons.Default.Shield to Color(0xFFFF9800)
-        is ShizukuState.PermissionDenied ->
-            Icons.Default.Shield to MaterialTheme.colorScheme.error
-        else ->
-            Icons.Default.Shield to MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+private fun ShizukuStatusButton(
+    state: ShizukuState,
+    onClick: () -> Unit
+) {
+    val dotColor = when (state) {
+        is ShizukuState.Ready -> Color(0xFF4CAF50)
+        is ShizukuState.PermissionNotRequested -> Color(0xFFFF9800)
+        is ShizukuState.PermissionDenied -> MaterialTheme.colorScheme.error
+        is ShizukuState.NotRunning -> Color(0xFF9E9E9E)
+        else -> Color(0xFF9E9E9E)
     }
-    Icon(
-        icon,
-        contentDescription = "Shizuku: ${state.displayLabel}",
-        tint = tint,
+    val iconTint = when (state) {
+        is ShizukuState.Ready -> Color(0xFF4CAF50)
+        is ShizukuState.PermissionNotRequested -> Color(0xFFFF9800)
+        is ShizukuState.PermissionDenied -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Box(
         modifier = Modifier
-            .padding(horizontal = 4.dp)
-            .size(22.dp)
+            .size(40.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Default.AdminPanelSettings,
+            contentDescription = "Shizuku: ${state.displayLabel}",
+            tint = iconTint,
+            modifier = Modifier.size(22.dp)
+        )
+        // Status dot — bottom-right corner
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(dotColor)
+                .align(Alignment.BottomEnd)
+                .offset(x = (-2).dp, y = (-2).dp)
+        )
+    }
+}
+
+// ─── Shizuku quick dialog ─────────────────────────────────────────────────────
+
+@Composable
+private fun ShizukuQuickDialog(
+    state: ShizukuState,
+    onRequestPermission: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.AdminPanelSettings,
+                contentDescription = null,
+                modifier = Modifier.size(36.dp),
+                tint = when (state) {
+                    is ShizukuState.Ready -> Color(0xFF4CAF50)
+                    is ShizukuState.PermissionNotRequested -> Color(0xFFFF9800)
+                    is ShizukuState.PermissionDenied -> MaterialTheme.colorScheme.error
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        },
+        title = { Text("Shizuku") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val (color, label) = when (state) {
+                        is ShizukuState.Ready ->
+                            Color(0xFF4CAF50) to state.displayLabel
+                        is ShizukuState.PermissionNotRequested ->
+                            Color(0xFFFF9800) to state.displayLabel
+                        is ShizukuState.PermissionDenied ->
+                            MaterialTheme.colorScheme.error to state.displayLabel
+                        is ShizukuState.NotRunning ->
+                            Color(0xFF9E9E9E) to state.displayLabel
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant to state.displayLabel
+                    }
+                    Box(
+                        Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(color)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(label, style = MaterialTheme.typography.bodySmall, color = color)
+                }
+
+                Text(
+                    stringResource(R.string.shizuku_description),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                if (state is ShizukuState.Ready) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        listOf("NTFS / EXT4 mount", "Format (mkfs.*)", "blkid / fdisk / lsblk").forEach {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.CheckCircle, null, tint = Color(0xFF4CAF50), modifier = Modifier.size(13.dp))
+                                Spacer(Modifier.width(5.dp))
+                                Text(it, style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (state is ShizukuState.PermissionNotRequested || state is ShizukuState.PermissionDenied) {
+                Button(onClick = onRequestPermission) {
+                    Text(stringResource(R.string.shizuku_grant))
+                }
+            } else if (state is ShizukuState.NotInstalled) {
+                Button(onClick = {
+                    try {
+                        val uri = Uri.parse("https://play.google.com/store/apps/details?id=moe.shizuku.privileged.api")
+                        context.startActivity(Intent(Intent.ACTION_VIEW, uri).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        })
+                    } catch (_: Exception) {}
+                    onDismiss()
+                }) {
+                    Text(stringResource(R.string.shizuku_install_playstore))
+                }
+            } else if (state is ShizukuState.NotRunning) {
+                Button(onClick = {
+                    try {
+                        val launchIntent = context.packageManager
+                            .getLaunchIntentForPackage("moe.shizuku.privileged.api")
+                        if (launchIntent != null) {
+                            context.startActivity(launchIntent)
+                        } else {
+                            val uri = Uri.parse("https://play.google.com/store/apps/details?id=moe.shizuku.privileged.api")
+                            context.startActivity(Intent(Intent.ACTION_VIEW, uri).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            })
+                        }
+                    } catch (_: Exception) {}
+                    onDismiss()
+                }) {
+                    Text("Open Shizuku")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.close))
+            }
+        }
     )
 }
 
-// ─── Shizuku banner ─────────────────────────────────────────────────────────
+// ─── Shizuku banner ───────────────────────────────────────────────────────────
 
 @Composable
 private fun ShizukuBanner(
     state: ShizukuState,
     onRequestPermission: () -> Unit
 ) {
+    val context = LocalContext.current
+
     AnimatedVisibility(
         visible = state !is ShizukuState.Ready,
         enter = fadeIn(),
@@ -202,27 +394,32 @@ private fun ShizukuBanner(
         val icon: ImageVector
         val actionLabel: String?
         val detail: String
+        var isOpenShizuku = false
 
         when (state) {
             is ShizukuState.PermissionNotRequested -> {
                 bgColor = Color(0xFFFFF8E1); textColor = Color(0xFFE65100)
-                icon = Icons.Default.Shield; actionLabel = "Autoriser"
-                detail = "Shizuku est prêt — cliquer pour activer l'accès privilégié"
+                icon = Icons.Default.Shield
+                actionLabel = stringResource(R.string.shizuku_grant)
+                detail = stringResource(R.string.shizuku_detail_permission_pending)
             }
             is ShizukuState.PermissionDenied -> {
                 bgColor = Color(0xFFFFEBEE); textColor = Color(0xFFC62828)
-                icon = Icons.Default.Shield; actionLabel = "Réessayer"
-                detail = "Permission refusée — cliquer pour demander à nouveau"
+                icon = Icons.Default.Shield
+                actionLabel = stringResource(R.string.shizuku_retry)
+                detail = stringResource(R.string.shizuku_detail_permission_denied)
             }
             is ShizukuState.NotRunning -> {
                 bgColor = Color(0xFFEDE7F6); textColor = Color(0xFF4527A0)
-                icon = Icons.Default.PowerSettingsNew; actionLabel = null
-                detail = "Démarrer via ADB:\nadb shell sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh"
+                icon = Icons.Default.PowerSettingsNew
+                actionLabel = "Open Shizuku"
+                isOpenShizuku = true
+                detail = stringResource(R.string.shizuku_detail_not_running)
             }
             is ShizukuState.NotInstalled -> {
                 bgColor = Color(0xFFE3F2FD); textColor = Color(0xFF1565C0)
                 icon = Icons.Default.GetApp; actionLabel = null
-                detail = "Installer l'app Shizuku depuis le Play Store ou GitHub (rikka/Shizuku)"
+                detail = stringResource(R.string.shizuku_detail_not_installed)
             }
             is ShizukuState.Ready -> return@AnimatedVisibility
         }
@@ -243,7 +440,7 @@ private fun ShizukuBanner(
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "Shizuku — Accès privilégié",
+                        stringResource(R.string.shizuku_title),
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = textColor
@@ -260,7 +457,19 @@ private fun ShizukuBanner(
                 if (actionLabel != null) {
                     Spacer(Modifier.width(8.dp))
                     FilledTonalButton(
-                        onClick = onRequestPermission,
+                        onClick = {
+                            if (isOpenShizuku) {
+                                try {
+                                    val launchIntent = context.packageManager
+                                        .getLaunchIntentForPackage("moe.shizuku.privileged.api")
+                                    if (launchIntent != null) {
+                                        context.startActivity(launchIntent)
+                                    }
+                                } catch (_: Exception) {}
+                            } else {
+                                onRequestPermission()
+                            }
+                        },
                         modifier = Modifier.height(34.dp),
                         contentPadding = PaddingValues(horizontal = 12.dp)
                     ) {
@@ -272,7 +481,7 @@ private fun ShizukuBanner(
     }
 }
 
-// ─── Device card ─────────────────────────────────────────────────────────────
+// ─── Device card ──────────────────────────────────────────────────────────────
 
 @Composable
 private fun DeviceCard(
@@ -295,7 +504,7 @@ private fun DeviceCard(
         shape = RoundedCornerShape(14.dp)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // ── Gradient header ─────────────────────────────────────────────
+            // ── Gradient header ──────────────────────────────────────────────
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -321,16 +530,22 @@ private fun DeviceCard(
                             style = MaterialTheme.typography.titleSmall
                         )
                         Text(
-                            device.mountPoint ?: "Non monté",
+                            device.mountPoint ?: stringResource(R.string.device_not_mounted),
                             color = Color.White.copy(alpha = 0.75f),
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = FontFamily.Monospace,
                             fontSize = 10.sp
                         )
                     }
-                    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         StatusChip(
-                            label = if (device.isMounted) "Monté" else "Non monté",
+                            label = if (device.isMounted)
+                                stringResource(R.string.device_mounted)
+                            else
+                                stringResource(R.string.device_not_mounted),
                             color = if (device.isMounted) Color(0xFF4CAF50) else Color(0xFFFF7043)
                         )
                         if (shizukuReady) {
@@ -340,7 +555,7 @@ private fun DeviceCard(
                 }
             }
 
-            // ── Storage info ────────────────────────────────────────────────
+            // ── Storage info ─────────────────────────────────────────────────
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
                 if (device.totalSpace > 0) {
                     LinearProgressIndicator(
@@ -362,10 +577,10 @@ private fun DeviceCard(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    StorageInfoItem("Total", formatBytes(device.totalSpace))
-                    StorageInfoItem("Utilisé", formatBytes(device.usedSpace))
-                    StorageInfoItem("Libre", formatBytes(device.freeSpace))
-                    StorageInfoItem("Type", device.fileSystem.displayName)
+                    StorageInfoItem(stringResource(R.string.storage_total), formatBytes(device.totalSpace))
+                    StorageInfoItem(stringResource(R.string.storage_used), formatBytes(device.usedSpace))
+                    StorageInfoItem(stringResource(R.string.storage_free), formatBytes(device.freeSpace))
+                    StorageInfoItem(stringResource(R.string.storage_type), device.fileSystem.displayName)
                 }
 
                 Spacer(Modifier.height(10.dp))
@@ -375,19 +590,19 @@ private fun DeviceCard(
                         FilledTonalButton(onClick = onMount, modifier = Modifier.weight(1f)) {
                             Icon(Icons.Default.Link, null, Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("Monter")
+                            Text(stringResource(R.string.action_mount))
                         }
                     } else {
                         OutlinedButton(onClick = onUnmount, modifier = Modifier.weight(1f)) {
                             Icon(Icons.Default.LinkOff, null, Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("Éjecter")
+                            Text(stringResource(R.string.action_eject))
                         }
                     }
                     Button(onClick = onClick, modifier = Modifier.weight(1f)) {
                         Icon(Icons.Default.ChevronRight, null, Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("Détails")
+                        Text(stringResource(R.string.action_details))
                     }
                 }
             }
@@ -395,43 +610,56 @@ private fun DeviceCard(
     }
 }
 
-@Composable
-private fun StatusChip(label: String, color: Color) {
-    Surface(color = color, shape = RoundedCornerShape(6.dp)) {
-        Text(
-            label,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            fontSize = 10.sp
-        )
-    }
-}
+// ─── Empty state ──────────────────────────────────────────────────────────────
 
 @Composable
 private fun EmptyState() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(48.dp),
+        contentAlignment = Alignment.Center
+    ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Icon(
-                Icons.Default.UsbOff, null,
-                modifier = Modifier.size(72.dp),
+                Icons.Default.UsbOff,
+                null,
+                modifier = Modifier.size(64.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
             )
             Text(
-                "Aucun périphérique USB détecté",
+                stringResource(R.string.no_devices_found),
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                "Connectez une clé USB via OTG\npuis appuyez sur Actualiser",
-                style = MaterialTheme.typography.bodyMedium,
+                stringResource(R.string.no_devices_hint),
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
             )
         }
+    }
+}
+
+// ─── Small helpers ────────────────────────────────────────────────────────────
+
+@Composable
+private fun StatusChip(label: String, color: Color) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = color.copy(alpha = 0.18f)
+    ) {
+        Text(
+            label,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            color = color,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 9.sp
+        )
     }
 }
 
@@ -440,22 +668,29 @@ private fun StorageInfoItem(label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             value,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            fontFamily = if (label == "Type") FontFamily.Default else FontFamily.Monospace
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp
         )
         Text(
             label,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 10.sp
         )
     }
 }
 
 private fun formatBytes(bytes: Long): String {
-    if (bytes <= 0) return "–"
-    val units = arrayOf("B", "KB", "MB", "GB", "TB")
-    var v = bytes.toDouble(); var u = 0
-    while (v >= 1024 && u < units.size - 1) { v /= 1024; u++ }
-    return "%.1f %s".format(v, units[u])
+    if (bytes <= 0) return "—"
+    val kb = bytes / 1024.0
+    val mb = kb / 1024.0
+    val gb = mb / 1024.0
+    return when {
+        gb >= 1.0 -> "%.1f GB".format(gb)
+        mb >= 1.0 -> "%.0f MB".format(mb)
+        kb >= 1.0 -> "%.0f KB".format(kb)
+        else      -> "$bytes B"
+    }
 }
