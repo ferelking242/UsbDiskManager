@@ -6,15 +6,19 @@ import androidx.lifecycle.viewModelScope
 import com.usbdiskmanager.core.model.BenchmarkResult
 import com.usbdiskmanager.core.model.DiskDevice
 import com.usbdiskmanager.core.model.DiskOperationResult
+import com.usbdiskmanager.shizuku.ShizukuManager
 import com.usbdiskmanager.usb.api.UsbDeviceRepository
 import com.usbdiskmanager.usb.impl.UsbBenchmarkManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import timber.log.Timber
 import javax.inject.Inject
@@ -36,6 +40,7 @@ data class DiskDetailUiState(
 class DiskDetailViewModel @Inject constructor(
     private val usbRepository: UsbDeviceRepository,
     private val benchmarkManager: UsbBenchmarkManager,
+    private val shizukuManager: ShizukuManager,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -43,6 +48,10 @@ class DiskDetailViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(DiskDetailUiState())
     val uiState: StateFlow<DiskDetailUiState> = _uiState.asStateFlow()
+
+    val shizukuReady: StateFlow<Boolean> = shizukuManager.state
+        .map { it.isReady }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), shizukuManager.isReady)
 
     init {
         loadDevice()
@@ -55,7 +64,6 @@ class DiskDetailViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(device = device, isLoading = false)
         }
 
-        // Also observe live updates
         usbRepository.connectedDevices.onEach { devices ->
             val device = devices.find { it.id == deviceId }
             if (device != null) {
