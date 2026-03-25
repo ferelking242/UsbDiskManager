@@ -15,8 +15,6 @@ import javax.inject.Singleton
  *   byte   43    : number of parts  (1–128)
  *   byte   44    : media type (0x12 = DVD, 0x14 = CD)
  *   bytes 45-63  : reserved (zeros)
- *
- * OPL reads ul.cfg from the same directory as the UL part files.
  */
 @Singleton
 class UlCfgManager @Inject constructor() {
@@ -29,15 +27,16 @@ class UlCfgManager @Inject constructor() {
         private const val TYPE_CD: Byte = 0x14
     }
 
-    /**
-     * Add or update an entry in ul.cfg.
-     *
-     * @param outputDir  directory containing UL part files
-     * @param gameId     raw PS2 serial e.g. "SLUS_012.34"
-     * @param gameName   display name (truncated to 32 chars)
-     * @param numParts   total number of 1 GB parts
-     * @param isCD       true if CD disc, false if DVD
-     */
+    data class UlEntry(
+        val gameName: String,
+        val gameId: String,
+        val numParts: Int,
+        val mediaType: Byte
+    ) {
+        val isCd: Boolean get() = mediaType == TYPE_CD
+        val gameIdClean: String get() = gameId.trimEnd('\u0000')
+    }
+
     fun addOrUpdateEntry(
         outputDir: String,
         gameId: String,
@@ -48,7 +47,7 @@ class UlCfgManager @Inject constructor() {
         val cfgFile = File(outputDir, "ul.cfg")
         try {
             val entries = readEntries(cfgFile).toMutableList()
-            val existingIdx = entries.indexOfFirst { it.gameId == gameId }
+            val existingIdx = entries.indexOfFirst { it.gameIdClean == gameId }
             val entry = UlEntry(
                 gameName = gameName.take(GAME_NAME_LEN),
                 gameId = gameId.take(GAME_ID_LEN).padEnd(GAME_ID_LEN, '\u0000'),
@@ -62,61 +61,113 @@ class UlCfgManager @Inject constructor() {
         }
     }
 
-    /** Remove an entry from ul.cfg (called on cancel). */
     fun removeEntry(outputDir: String, gameId: String) {
         val cfgFile = File(outputDir, "ul.cfg")
         if (!cfgFile.exists()) return
         try {
-            val entries = readEntries(cfgFile).filter { it.gameId.trim('\u0000') != gameId }
+            val entries = readEntries(cfgFile).filter { it.gameIdClean != gameId }
             writeEntries(cfgFile, entries)
         } catch (e: Exception) {
             Timber.e(e, "Failed to remove ul.cfg entry")
         }
     }
 
-    // ────────────────────────────────────────────
-    // Private helpers
-    // ────────────────────────────────────────────
+    /**
+     * Read all entries from a ul.cfg file.
+     * Returns empty list if file doesn't exist or is unreadable.
+     */
+    fun readAllEntries(cfgFile: File): List<UlEntry> = readEntries(cfgFile)
 
-    private data class UlEntry(
-        val gameName: String,
-        val gameId: String,
-        val numParts: Int,
-        val mediaType: Byte
-    )
+    /**
+     * Merge two ul.cfg files into a destination.
+     * Entries from [sourceCfg] are merged into [destCfg].
+     * If a gameId already exists in dest, the dest version wins (no overwrite).
+     * Returns the number of new entries added.
+     */
+    fun mergeInto(sourceCfg: File, destCfg: File): Int {
+        return try {
+            val destEntries = readEntries(destCfg).toMutableList()
+            val sourceEntries = readEntries(sourceCfg)
+            val existingIds = destEntries.map { it.gameIdClean }.toSet()
+            var added = 0
+            for (entry in sourceEntries) {
+                if (entry.gameIdClean !in existingIds) {
+                    destEntries.add(entry)
+                    added++
+                }
+            }
+            writeEntries(destCfg, destEntries)
+            added
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to merge ul.cfg")
+            0
+        }
+    }
+
+    /**
+     * Merge two ul.cfg files producing a new unified one at [outputCfg].
+     * Source A takes priority when there's a conflict (same gameId).
+     * Returns total entry count in the merged result.
+     */
+    fun mergeFiles(fileA: File, fileB: File, outputCfg: File): Int {
+        return try {
+            val entriesA = readEntries(fileA)
+            val entriesB = readEntries(fileB)
+            val idsFromA = entriesA.map { it.gameIdClean }.toSet()
+            val merged = entriesA.toMutableList()
+            for (entry in entriesB) {
+                if (entry.gameIdClean !in idsFromA) {
+                    merged.add(entry)
+                }
+            }
+            writeEntries(outputCfg, merged)
+            merged.size
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to merge ul.cfg files")
+            0
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // Private helpers
+    // ──────────────────────────────────────────────────────────────
 
     private fun readEntries(file: File): List<UlEntry> {
-        if (!file.exists()) return emptyList()
-        val size = file.length()
-        val count = (size / ENTRY_SIZE).toInt()
+        if (!file.exists() || file.length() == 0L) return emptyList()
+        val count = (file.length() / ENTRY_SIZE).toInt()
         val result = mutableListOf<UlEntry>()
-        RandomAccessFile(file, "r").use { raf ->
-            for (i in 0 until count) {
-                val buf = ByteArray(ENTRY_SIZE)
-                raf.readFully(buf)
-                val name = String(buf, 0, GAME_NAME_LEN, Charsets.ISO_8859_1).trimNull()
-                val id   = String(buf, GAME_NAME_LEN, GAME_ID_LEN, Charsets.ISO_8859_1)
-                val parts = buf[43].toInt() and 0xFF
-                val type = buf[44]
-                result.add(UlEntry(name, id, parts, type))
+        try {
+            RandomAccessFile(file, "r").use { raf ->
+                for (i in 0 until count) {
+                    val buf = ByteArray(ENTRY_SIZE)
+                    raf.readFully(buf)
+                    val name = String(buf, 0, GAME_NAME_LEN, Charsets.ISO_8859_1).trimEnd('\u0000')
+                    val id = String(buf, GAME_NAME_LEN, GAME_ID_LEN, Charsets.ISO_8859_1)
+                    val parts = buf[43].toInt() and 0xFF
+                    val type = buf[44]
+                    result.add(UlEntry(name, id, parts, type))
+                }
             }
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to read ul.cfg: ${file.absolutePath}")
         }
         return result
     }
 
     private fun writeEntries(file: File, entries: List<UlEntry>) {
+        file.parentFile?.mkdirs()
         RandomAccessFile(file, "rw").use { raf ->
             raf.setLength(0L)
             for (entry in entries) {
                 val buf = ByteArray(ENTRY_SIZE) { 0 }
-                entry.gameName.toByteArray(Charsets.ISO_8859_1).copyInto(buf, 0, 0, minOf(entry.gameName.length, GAME_NAME_LEN))
-                entry.gameId.toByteArray(Charsets.ISO_8859_1).copyInto(buf, GAME_NAME_LEN, 0, minOf(entry.gameId.length, GAME_ID_LEN))
+                val nameBytes = entry.gameName.toByteArray(Charsets.ISO_8859_1)
+                nameBytes.copyInto(buf, 0, 0, minOf(nameBytes.size, GAME_NAME_LEN))
+                val idBytes = entry.gameId.toByteArray(Charsets.ISO_8859_1)
+                idBytes.copyInto(buf, GAME_NAME_LEN, 0, minOf(idBytes.size, GAME_ID_LEN))
                 buf[43] = entry.numParts.toByte()
                 buf[44] = entry.mediaType
                 raf.write(buf)
             }
         }
     }
-
-    private fun String.trimNull(): String = trimEnd('\u0000')
 }
