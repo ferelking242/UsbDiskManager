@@ -1,5 +1,6 @@
 package com.usbdiskmanager.ps2.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -113,7 +114,7 @@ fun Ps2DownloadScreen(viewModel: Ps2ViewModel) {
         HorizontalDivider()
 
         LazyColumn(
-            contentPadding = PaddingValues(horizontal = 16.dp, top = 8.dp, bottom = 96.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.weight(1f)
         ) {

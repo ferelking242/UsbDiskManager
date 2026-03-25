@@ -6,6 +6,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -18,6 +19,7 @@ import com.usbdiskmanager.ps2.domain.model.OutputDestination
 import com.usbdiskmanager.ps2.domain.model.Ps2Game
 import com.usbdiskmanager.ps2.util.MountInfo
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConversionDialog(
     game: Ps2Game,
@@ -292,6 +294,7 @@ fun Fat32WarningDialog(
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BatchConversionDialog(
     count: Int,
