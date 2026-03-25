@@ -11,11 +11,9 @@ import javax.inject.Singleton
 
 /**
  * Privileged command runner backed by Shizuku.
- *
- * Runs shell commands as ADB shell (uid=2000) or root (uid=0) depending on
- * how Shizuku was started. Falls back to normal shell when Shizuku is unavailable.
- *
- * Unlocks: mount, umount, blkid, mkfs.*, fdisk, lsblk, /proc/partitions, /dev/block/*
+ * Runs commands as ADB shell (uid=2000) or root (uid=0).
+ * Falls back to normal shell when Shizuku is unavailable.
+ * Unlocks: mount, umount, blkid, mkfs, fdisk, lsblk
  */
 @Singleton
 class ShizukuCommandRunner @Inject constructor(
@@ -35,31 +33,41 @@ class ShizukuCommandRunner @Inject constructor(
                 ShellResult(
                     exitCode = -1,
                     stdout = "",
-                    stderr = "Shizuku non disponible — cette commande nécessite des privilèges élevés.\n" +
-                             "Active Shizuku via l'app ou ADB: adb shell sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh"
+                    stderr = "Shizuku not available. Start via: " +
+                        "adb shell sh /storage/emulated/0/Android/data/" +
+                        "moe.shizuku.privileged.api/start.sh"
                 )
             }
         }
 
-    /**
-     * Core method: runs via Shizuku.newProcess() as ADB/root uid.
-     */
+    @Suppress("DiscouragedPrivateApi")
+    private fun newShizukuProcess(command: String): Process {
+        val method = Shizuku::class.java.getDeclaredMethod(
+            "newProcess",
+            Array<String>::class.java,
+            Array<String>::class.java,
+            String::class.java
+        )
+        method.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        return method.invoke(null, arrayOf("/system/bin/sh", "-c", command), null, null) as Process
+    }
+
     private fun runViaShizuku(command: String): ShellResult {
         return try {
-            Timber.d("[Shizuku] >>> $command")
-            val process = Shizuku.newProcess(
-                arrayOf("/system/bin/sh", "-c", command),
-                null,
-                null
-            )
+            Timber.d("[Shizuku] >>> %s", command)
+            val process = newShizukuProcess(command)
             val stdout = process.inputStream.bufferedReader().readText().trim()
             val stderr = process.errorStream.bufferedReader().readText().trim()
             val exitCode = process.waitFor()
-            if (exitCode != 0) Timber.d("[Shizuku] exit=$exitCode stderr=${stderr.take(150)}")
-            else Timber.d("[Shizuku] OK: ${stdout.take(100)}")
+            if (exitCode != 0) {
+                Timber.d("[Shizuku] exit=%d stderr=%s", exitCode, stderr.take(150))
+            } else {
+                Timber.d("[Shizuku] OK: %s", stdout.take(100))
+            }
             ShellResult(exitCode, stdout, stderr)
         } catch (e: SecurityException) {
-            Timber.e(e, "[Shizuku] SecurityException — permission révoquée")
+            Timber.e(e, "[Shizuku] SecurityException - permission revoked")
             shizukuManager.checkPermission()
             runViaShell(command)
         } catch (e: Exception) {
@@ -70,14 +78,14 @@ class ShizukuCommandRunner @Inject constructor(
 
     private fun runViaShell(command: String): ShellResult {
         return try {
-            Timber.d("[Shell] >>> $command")
+            Timber.d("[Shell] >>> %s", command)
             val process = Runtime.getRuntime().exec(arrayOf("/system/bin/sh", "-c", command))
             val stdout = process.inputStream.bufferedReader().readText().trim()
             val stderr = process.errorStream.bufferedReader().readText().trim()
             val exitCode = process.waitFor()
             ShellResult(exitCode, stdout, stderr)
         } catch (e: Exception) {
-            Timber.e(e, "[Shell] Failed: $command")
+            Timber.e(e, "[Shell] Failed: %s", command)
             ShellResult(-1, "", e.message ?: "Unknown error")
         }
     }
