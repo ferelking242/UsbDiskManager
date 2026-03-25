@@ -11,19 +11,23 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -31,7 +35,10 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.usbdiskmanager.ps2.domain.model.ConversionStatus
+import com.usbdiskmanager.ps2.domain.model.OutputDestination
+import com.usbdiskmanager.ps2.ui.components.BatchConversionDialog
 import com.usbdiskmanager.ps2.ui.components.ConversionDialog
+import com.usbdiskmanager.ps2.ui.components.Fat32WarningDialog
 import com.usbdiskmanager.ps2.ui.components.GameCard
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -41,104 +48,159 @@ fun Ps2StudioScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val scrollState = rememberLazyListState()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
-    // SAF folder picker launcher
     val folderPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
         uri?.let { viewModel.addScanUri(it) }
     }
 
-    // MANAGE_EXTERNAL_STORAGE permission launcher (Android 11+)
     val manageStorageLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { viewModel.scan() }
 
-    // Check storage permission
     val hasStorageAccess = remember {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
             Environment.isExternalStorageManager()
-        } else true
+        else true
     }
+
+    var showBatchDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            LargeTopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = "PS2 Studio",
-                            fontWeight = FontWeight.ExtraBold
-                        )
-                        Text(
-                            text = "${uiState.games.size} ISO détecté(s)",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                navigationIcon = {
-                    Icon(
-                        Icons.Default.VideogameAsset,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .padding(start = 12.dp)
-                            .size(32.dp)
-                    )
-                },
-                actions = {
-                    // Sort button
-                    var showSortMenu by remember { mutableStateOf(false) }
-                    IconButton(onClick = { showSortMenu = true }) {
-                        Icon(Icons.Default.Sort, contentDescription = "Trier")
-                    }
-                    DropdownMenu(
-                        expanded = showSortMenu,
-                        onDismissRequest = { showSortMenu = false }
-                    ) {
-                        SortMode.entries.forEach { mode ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        text = when (mode) {
-                                            SortMode.TITLE  -> "Par titre"
-                                            SortMode.SIZE   -> "Par taille"
-                                            SortMode.STATUS -> "Par statut"
-                                        },
-                                        fontWeight = if (uiState.sortMode == mode) FontWeight.Bold else FontWeight.Normal
-                                    )
-                                },
-                                onClick = {
-                                    viewModel.setSortMode(mode)
-                                    showSortMenu = false
-                                }
+            Column {
+                LargeTopAppBar(
+                    title = {
+                        Column {
+                            Text("PS2 Studio", fontWeight = FontWeight.ExtraBold)
+                            Text(
+                                "${uiState.games.size} ISO détecté(s)",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                    }
-
-                    // Add folder
-                    IconButton(onClick = { folderPickerLauncher.launch(null) }) {
-                        Icon(Icons.Default.FolderOpen, contentDescription = "Ajouter dossier")
-                    }
-
-                    // Refresh
-                    IconButton(onClick = viewModel::scan) {
-                        if (uiState.isScanning) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.Default.Refresh, contentDescription = "Scanner")
+                    },
+                    navigationIcon = {
+                        Icon(
+                            Icons.Default.VideogameAsset,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(start = 12.dp).size(32.dp)
+                        )
+                    },
+                    actions = {
+                        // Multi-select toggle
+                        if (uiState.selectedTab == Ps2Tab.GAMES) {
+                            IconButton(onClick = viewModel::toggleMultiSelectMode) {
+                                Icon(
+                                    if (uiState.isMultiSelectMode) Icons.Default.Close
+                                    else Icons.Default.Checklist,
+                                    contentDescription = "Sélection multiple",
+                                    tint = if (uiState.isMultiSelectMode)
+                                        MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            if (uiState.isMultiSelectMode && uiState.multiSelectedIds.isNotEmpty()) {
+                                IconButton(onClick = { showBatchDialog = true }) {
+                                    Icon(Icons.Default.Transform, contentDescription = "Convertir sélection",
+                                        tint = MaterialTheme.colorScheme.primary)
+                                }
+                            }
                         }
+
+                        var showSortMenu by remember { mutableStateOf(false) }
+                        if (uiState.selectedTab == Ps2Tab.GAMES) {
+                            IconButton(onClick = { showSortMenu = true }) {
+                                Icon(Icons.Default.Sort, contentDescription = "Trier")
+                            }
+                            DropdownMenu(expanded = showSortMenu, onDismissRequest = { showSortMenu = false }) {
+                                SortMode.entries.forEach { mode ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                when (mode) {
+                                                    SortMode.TITLE  -> "Par titre"
+                                                    SortMode.SIZE   -> "Par taille"
+                                                    SortMode.STATUS -> "Par statut"
+                                                },
+                                                fontWeight = if (uiState.sortMode == mode)
+                                                    FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        },
+                                        onClick = { viewModel.setSortMode(mode); showSortMenu = false }
+                                    )
+                                }
+                            }
+                            IconButton(onClick = { folderPickerLauncher.launch(null) }) {
+                                Icon(Icons.Default.FolderOpen, contentDescription = "Ajouter dossier")
+                            }
+                            IconButton(onClick = viewModel::scan) {
+                                if (uiState.isScanning) {
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Icon(Icons.Default.Refresh, contentDescription = "Scanner")
+                                }
+                            }
+                        }
+                    },
+                    scrollBehavior = scrollBehavior
+                )
+
+                // ── Telegram-style horizontal sub-tab bar ──
+                ScrollableTabRow(
+                    selectedTabIndex = uiState.selectedTab.ordinal,
+                    edgePadding = 16.dp,
+                    divider = {},
+                    indicator = { tabPositions ->
+                        if (uiState.selectedTab.ordinal < tabPositions.size) {
+                            TabRowDefaults.SecondaryIndicator(
+                                modifier = Modifier.tabIndicatorOffset(
+                                    tabPositions[uiState.selectedTab.ordinal]
+                                ),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    },
+                    containerColor = MaterialTheme.colorScheme.surface
+                ) {
+                    Ps2Tab.entries.forEach { tab ->
+                        Tab(
+                            selected = uiState.selectedTab == tab,
+                            onClick = { viewModel.setTab(tab) },
+                            text = {
+                                Text(
+                                    text = when (tab) {
+                                        Ps2Tab.GAMES     -> "Jeux"
+                                        Ps2Tab.MERGE_CFG -> "Fusionner CFG"
+                                        Ps2Tab.DOWNLOAD  -> "Télécharger"
+                                    },
+                                    fontWeight = if (uiState.selectedTab == tab)
+                                        FontWeight.Bold else FontWeight.Normal
+                                )
+                            },
+                            icon = {
+                                Icon(
+                                    when (tab) {
+                                        Ps2Tab.GAMES     -> Icons.Default.VideogameAsset
+                                        Ps2Tab.MERGE_CFG -> Icons.Default.MergeType
+                                        Ps2Tab.DOWNLOAD  -> Icons.Default.Download
+                                    },
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        )
                     }
-                },
-                scrollBehavior = scrollBehavior
-            )
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            }
         }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (!hasStorageAccess) {
                 StoragePermissionPrompt(
                     modifier = Modifier.align(Alignment.Center),
@@ -152,149 +214,173 @@ fun Ps2StudioScreen(
                     }
                 )
             } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding)
-                ) {
-                    // Search bar
-                    SearchBar(
-                        query = uiState.searchQuery,
-                        onQueryChange = viewModel::setSearch,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                when (uiState.selectedTab) {
+                    Ps2Tab.GAMES     -> GameListTab(
+                        uiState = uiState,
+                        viewModel = viewModel,
+                        onPickFolder = { folderPickerLauncher.launch(null) }
                     )
-
-                    // Scan paths row
-                    if (uiState.scanPaths.isNotEmpty()) {
-                        ScanPathsRow(
-                            paths = uiState.scanPaths,
-                            onRemove = viewModel::removeScanPath
-                        )
-                    }
-
-                    // Game list
-                    if (uiState.games.isEmpty() && !uiState.isScanning) {
-                        EmptyState(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .weight(1f),
-                            onPickFolder = { folderPickerLauncher.launch(null) }
-                        )
-                    } else {
-                        LazyColumn(
-                            state = scrollState,
-                            contentPadding = PaddingValues(
-                                start = 16.dp,
-                                end = 16.dp,
-                                top = 4.dp,
-                                bottom = 96.dp // space for dock
-                            ),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            items(
-                                items = uiState.filteredGames,
-                                key = { it.id }
-                            ) { game ->
-                                val progress = uiState.activeProgress[game.isoPath]
-                                GameCard(
-                                    game = game,
-                                    progress = progress,
-                                    onConvertClick = { viewModel.selectGame(game) },
-                                    onPauseClick = { viewModel.pauseConversion(game.isoPath) },
-                                    onResumeClick = { viewModel.resumeConversion(game.isoPath) },
-                                    onCancelClick = { viewModel.cancelConversion(game.isoPath) },
-                                    onFetchCoverClick = { viewModel.fetchCover(game) }
-                                )
-                            }
-                        }
-                    }
+                    Ps2Tab.MERGE_CFG -> UlCfgMergerScreen()
+                    Ps2Tab.DOWNLOAD  -> Ps2DownloadScreen(viewModel = viewModel)
                 }
             }
         }
     }
 
-    // Conversion confirmation dialog
+    // ── Dialogs ──
+
+    // Single game conversion dialog
     if (uiState.showConvertDialog && uiState.selectedGame != null) {
         ConversionDialog(
             game = uiState.selectedGame!!,
+            availableUsbMounts = uiState.availableUsbMounts,
+            initialDestination = uiState.pendingDestination,
             onDismiss = viewModel::dismissDialog,
-            onConvert = { viewModel.startConversion(uiState.selectedGame!!) }
+            onConvert = { dest -> viewModel.requestConversionWithDest(dest) }
         )
     }
 
-    // Error snackbar
-    uiState.errorMessage?.let { msg ->
-        LaunchedEffect(msg) {
-            viewModel.clearError()
-        }
+    // FAT32 warning
+    if (uiState.showFat32Warning) {
+        Fat32WarningDialog(
+            mount = uiState.fat32WarningMount,
+            onProceedAnyway = viewModel::proceedDespiteFat32Warning,
+            onDismiss = viewModel::dismissDialog
+        )
+    }
+
+    // Batch conversion dialog
+    if (showBatchDialog) {
+        BatchConversionDialog(
+            count = uiState.multiSelectedIds.size,
+            availableUsbMounts = uiState.availableUsbMounts,
+            initialDestination = uiState.pendingDestination,
+            onDismiss = { showBatchDialog = false },
+            onConvert = { dest ->
+                showBatchDialog = false
+                viewModel.requestConversionWithDest(dest)
+            }
+        )
+    }
+
+    uiState.errorMessage?.let {
+        LaunchedEffect(it) { viewModel.clearError() }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SearchBar(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    modifier: Modifier = Modifier
+private fun GameListTab(
+    uiState: Ps2UiState,
+    viewModel: Ps2ViewModel,
+    onPickFolder: () -> Unit
 ) {
-    OutlinedTextField(
-        value = query,
-        onValueChange = onQueryChange,
-        modifier = modifier,
-        placeholder = { Text("Rechercher un jeu...") },
-        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-        trailingIcon = {
-            if (query.isNotEmpty()) {
-                IconButton(onClick = { onQueryChange("") }) {
-                    Icon(Icons.Default.Clear, contentDescription = "Effacer")
+    val scrollState = rememberLazyListState()
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Multi-select action bar
+        AnimatedVisibility(visible = uiState.isMultiSelectMode) {
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "${uiState.multiSelectedIds.size} sélectionné(s)",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(
+                            onClick = viewModel::selectAllGames,
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        ) { Text("Tout sélect.") }
+                        TextButton(
+                            onClick = viewModel::clearSelection,
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        ) { Text("Vider") }
+                    }
                 }
             }
-        },
-        singleLine = true,
-        shape = RoundedCornerShape(12.dp)
-    )
-}
-
-@Composable
-private fun ScanPathsRow(paths: List<String>, onRemove: (String) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-        TextButton(onClick = { expanded = !expanded }) {
-            Icon(
-                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.width(4.dp))
-            Text("${paths.size} dossier(s) scannés")
         }
-        AnimatedVisibility(visible = expanded) {
-            Column {
-                paths.forEach { path ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(start = 8.dp)
+
+        // Search bar
+        OutlinedTextField(
+            value = uiState.searchQuery,
+            onValueChange = viewModel::setSearch,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            placeholder = { Text("Rechercher un jeu...") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            trailingIcon = {
+                if (uiState.searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { viewModel.setSearch("") }) {
+                        Icon(Icons.Default.Clear, contentDescription = "Effacer")
+                    }
+                }
+            },
+            singleLine = true,
+            shape = RoundedCornerShape(12.dp)
+        )
+
+        if (uiState.games.isEmpty() && !uiState.isScanning) {
+            EmptyState(
+                modifier = Modifier.fillMaxSize().weight(1f),
+                onPickFolder = onPickFolder
+            )
+        } else {
+            LazyColumn(
+                state = scrollState,
+                contentPadding = PaddingValues(
+                    start = 16.dp, end = 16.dp, top = 4.dp, bottom = 96.dp
+                ),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                items(items = uiState.filteredGames, key = { it.id }) { game ->
+                    val progress = uiState.activeProgress[game.isoPath]
+                    val isSelected = game.id in uiState.multiSelectedIds
+
+                    Box(
+                        modifier = Modifier
+                            .combinedClickable(
+                                onClick = {
+                                    if (uiState.isMultiSelectMode) viewModel.toggleGameSelection(game)
+                                },
+                                onLongClick = {
+                                    if (!uiState.isMultiSelectMode) {
+                                        viewModel.toggleMultiSelectMode()
+                                        viewModel.toggleGameSelection(game)
+                                    }
+                                }
+                            )
                     ) {
-                        Icon(
-                            Icons.Default.Folder,
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp),
-                            tint = MaterialTheme.colorScheme.tertiary
+                        GameCard(
+                            game = game,
+                            progress = progress,
+                            isSelected = isSelected,
+                            isMultiSelectMode = uiState.isMultiSelectMode,
+                            onConvertClick = {
+                                if (!uiState.isMultiSelectMode) viewModel.selectGame(game)
+                                else viewModel.toggleGameSelection(game)
+                            },
+                            onPauseClick = { viewModel.pauseConversion(game.isoPath) },
+                            onResumeClick = { viewModel.resumeConversion(game.isoPath) },
+                            onCancelClick = { viewModel.cancelConversion(game.isoPath) },
+                            onFetchCoverClick = { viewModel.fetchCover(game) }
                         )
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            text = path,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(
-                            onClick = { onRemove(path) },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(Icons.Default.RemoveCircleOutline, null, modifier = Modifier.size(14.dp))
-                        }
                     }
                 }
             }
@@ -323,7 +409,7 @@ private fun EmptyState(modifier: Modifier = Modifier, onPickFolder: () -> Unit) 
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "Placez vos ISO dans /PS2Manager/ISO/\nou sélectionnez un dossier manuellement",
+            text = "Placez vos ISO dans /usbdiskmanager/PS2Manager/ISO/\nou sélectionnez un dossier manuellement",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.outline,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -351,18 +437,13 @@ private fun StoragePermissionPrompt(modifier: Modifier = Modifier, onGrant: () -
             modifier = Modifier.size(64.dp),
             tint = MaterialTheme.colorScheme.primary
         )
+        Text("Accès stockage requis", style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold)
         Text(
-            text = "Accès stockage requis",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = "PS2 Studio nécessite l'accès complet au stockage pour lire/écrire les fichiers ISO et UL.",
+            "PS2 Studio nécessite l'accès complet au stockage pour lire/écrire les fichiers ISO et UL.",
             style = MaterialTheme.typography.bodySmall,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center
         )
-        Button(onClick = onGrant) {
-            Text("Accorder l'accès")
-        }
+        Button(onClick = onGrant) { Text("Accorder l'accès") }
     }
 }

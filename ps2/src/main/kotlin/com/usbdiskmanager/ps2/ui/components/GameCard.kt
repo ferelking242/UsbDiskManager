@@ -1,18 +1,23 @@
 package com.usbdiskmanager.ps2.ui.components
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -29,6 +34,8 @@ import java.io.File
 fun GameCard(
     game: Ps2Game,
     progress: ConversionProgress?,
+    isSelected: Boolean = false,
+    isMultiSelectMode: Boolean = false,
     onConvertClick: () -> Unit,
     onPauseClick: () -> Unit,
     onResumeClick: () -> Unit,
@@ -36,67 +43,112 @@ fun GameCard(
     onFetchCoverClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val borderColor by animateColorAsState(
+        targetValue = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "border"
+    )
+    val bgColor by animateColorAsState(
+        targetValue = if (isSelected)
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
+        else
+            Color.Transparent,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "bg"
+    )
+
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .animateContentSize(),
+            .animateContentSize()
+            .then(
+                if (isSelected) Modifier.border(2.dp, borderColor, RoundedCornerShape(16.dp))
+                else Modifier
+            ),
         shape = RoundedCornerShape(16.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 6.dp else 4.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
         )
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                // Cover art
-                CoverThumbnail(game = game, onFetchCoverClick = onFetchCoverClick)
+        Box(modifier = Modifier.background(bgColor)) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Multi-select checkbox or cover art
+                    if (isMultiSelectMode) {
+                        Box(
+                            modifier = Modifier
+                                .size(width = 40.dp, height = 40.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (isSelected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.surfaceContainerHighest
+                                )
+                                .clickable(onClick = onConvertClick),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isSelected) {
+                                Icon(
+                                    Icons.Default.Check,
+                                    contentDescription = "Sélectionné",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                    } else {
+                        CoverThumbnail(game = game, onFetchCoverClick = onFetchCoverClick)
+                    }
 
-                // Game info
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = game.title,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (game.gameId.isNotBlank()) {
+                    // Game info
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = game.gameId,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontSize = 11.sp
+                            text = game.title,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
+                        if (game.gameId.isNotBlank()) {
+                            Text(
+                                text = game.gameId,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontSize = 11.sp
+                            )
+                        }
+                        Spacer(Modifier.height(2.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            RegionChip(game.region)
+                            SizeChip(game.sizeMb)
+                        }
                     }
-                    Spacer(Modifier.height(2.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        RegionChip(game.region)
-                        SizeChip(game.sizeMb)
+
+                    // Status & actions (hidden in multi-select mode)
+                    if (!isMultiSelectMode) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            StatusIcon(game.conversionStatus)
+                            Spacer(Modifier.height(4.dp))
+                            ActionButton(
+                                game = game,
+                                progress = progress,
+                                onConvertClick = onConvertClick,
+                                onPauseClick = onPauseClick,
+                                onResumeClick = onResumeClick,
+                                onCancelClick = onCancelClick
+                            )
+                        }
                     }
                 }
 
-                // Status & actions
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    StatusIcon(game.conversionStatus)
-                    Spacer(Modifier.height(4.dp))
-                    ActionButton(
-                        game = game,
-                        progress = progress,
-                        onConvertClick = onConvertClick,
-                        onPauseClick = onPauseClick,
-                        onResumeClick = onResumeClick,
-                        onCancelClick = onCancelClick
-                    )
+                // Progress bar (shown when converting)
+                if (progress != null && !isMultiSelectMode) {
+                    Spacer(Modifier.height(8.dp))
+                    ConversionProgressRow(progress)
                 }
-            }
-
-            // Progress bar (shown when converting)
-            if (progress != null) {
-                Spacer(Modifier.height(8.dp))
-                ConversionProgressRow(progress)
             }
         }
     }
@@ -139,10 +191,7 @@ private fun CoverThumbnail(game: Ps2Game, onFetchCoverClick: () -> Unit) {
 
 @Composable
 private fun RegionChip(region: String) {
-    Surface(
-        color = MaterialTheme.colorScheme.primaryContainer,
-        shape = RoundedCornerShape(4.dp)
-    ) {
+    Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(4.dp)) {
         Text(
             text = region,
             style = MaterialTheme.typography.labelSmall,
@@ -159,10 +208,7 @@ private fun SizeChip(sizeBytes: Long) {
         sizeBytes >= 1_048_576L     -> "%.0f MB".format(sizeBytes / 1_048_576.0)
         else                         -> "${sizeBytes / 1024} KB"
     }
-    Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        shape = RoundedCornerShape(4.dp)
-    ) {
+    Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(4.dp)) {
         Text(
             text = formatted,
             style = MaterialTheme.typography.labelSmall,
@@ -195,13 +241,12 @@ private fun ActionButton(
 ) {
     when {
         progress != null -> {
-            // Active conversion — show pause
             Row {
                 IconButton(onClick = onPauseClick, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.Pause, contentDescription = "Pause", modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Pause, "Pause", modifier = Modifier.size(18.dp))
                 }
                 IconButton(onClick = onCancelClick, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.Close, contentDescription = "Cancel", modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Close, "Cancel", modifier = Modifier.size(18.dp))
                 }
             }
         }
@@ -209,16 +254,16 @@ private fun ActionButton(
         game.conversionStatus == ConversionStatus.ERROR -> {
             Row {
                 IconButton(onClick = onResumeClick, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = "Resume", modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.PlayArrow, "Resume", modifier = Modifier.size(18.dp))
                 }
                 IconButton(onClick = onCancelClick, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.Delete, contentDescription = "Cancel", modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Delete, "Cancel", modifier = Modifier.size(18.dp))
                 }
             }
         }
         game.conversionStatus != ConversionStatus.COMPLETED -> {
             IconButton(onClick = onConvertClick, modifier = Modifier.size(28.dp)) {
-                Icon(Icons.Default.Transform, contentDescription = "Convert", modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.Transform, "Convert", modifier = Modifier.size(18.dp))
             }
         }
         else -> {
@@ -235,10 +280,7 @@ private fun ActionButton(
 @Composable
 private fun ConversionProgressRow(progress: ConversionProgress) {
     Column {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(
                 text = "%.1f%%  %.1f MB/s".format(progress.percent * 100, progress.speedMbps),
                 style = MaterialTheme.typography.labelSmall,

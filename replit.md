@@ -10,19 +10,17 @@ Projet Android natif — aucun Node.js, aucun TypeScript.
 ├── core/                        # Modèles, utilitaires, entités
 ├── usb/                         # Détection USB OTG, permissions, formatage
 ├── storage/                     # Opérations fichiers (SAF + accès direct)
+├── ps2/                         # Module PS2 Studio (conversion, téléchargement, fusion)
 ├── gradle/
 │   ├── libs.versions.toml       # Catalogue de dépendances
 │   └── wrapper/
-│       ├── gradle-wrapper.jar
-│       └── gradle-wrapper.properties
 ├── .github/
 │   └── workflows/
 │       └── build.yml            # CI GitHub Actions → APK signé arm64-v8a
 ├── gradlew / gradlew.bat
-├── build.gradle.kts             # Root build
+├── build.gradle.kts
 ├── settings.gradle.kts
-├── status.py                    # Serveur de statut (Replit uniquement)
-└── replit.md                    # Ce fichier
+└── replit.md
 ```
 
 ## Stack technique
@@ -34,21 +32,44 @@ Projet Android natif — aucun Node.js, aucun TypeScript.
 | Architecture | Clean Architecture + MVVM |
 | DI | Hilt 2.54 |
 | Async | Coroutines + StateFlow |
-| USB | UsbManager API + libaums |
+| USB | UsbManager API |
 | Fichiers | SAF (Storage Access Framework) + accès direct |
 | Navigation | Navigation Compose |
 | CI/CD | GitHub Actions → APK arm64-v8a signé |
 
-## Build local
+## Structure dossiers (sur Android)
+
+```
+sdcard/usbdiskmanager/PS2Manager/
+  ├── ISO/        ← fichiers ISO scannés
+  ├── UL/         ← fichiers UL convertis (défaut)
+  ├── ART/        ← pochettes de jeux
+  └── Downloads/  ← ISO téléchargés
+```
+Sur USB : fichiers UL toujours à la racine (imposé par OPL).
+
+## applicationId
+
+`com.diskforge.usbmanager` (namespace code : `com.usbdiskmanager`)
+
+## Build
 
 ```bash
-./gradlew assembleDebug       # APK debug
-./gradlew assembleRelease     # APK release (nécessite keystore)
+./gradlew assembleDebug
+./gradlew assembleRelease     # nécessite keystore
 ```
 
-## GitHub Actions
+## Fonctionnalités PS2 Studio
 
-Secrets à configurer dans le repo GitHub (Settings → Secrets → Actions) :
+- **Dock flottant** : toujours visible, pill animée, pas d'auto-masquage, mode immersif (sans barre Android)
+- **Tab bar** style Telegram : Jeux / Fusionner CFG / Télécharger
+- **Multi-sélection** : appui long pour activer, "Tout sélectionner", conversion groupée
+- **Destination de conversion** : Défaut (interne) / USB (racine) / Personnalisé
+- **Vérification FAT32** avant écriture USB — avertissement si non-FAT32
+- **Fusion ul.cfg** : merge de deux fichiers sans casser les entrées existantes
+- **Download manager** : HTTP avec reprise (Range), pause, resume, retry
+
+## GitHub Actions — Secrets
 
 | Secret | Valeur |
 |---|---|
@@ -57,16 +78,10 @@ Secrets à configurer dans le repo GitHub (Settings → Secrets → Actions) :
 | `KEY_ALIAS` | `ferelONDONGO1631@` |
 | `KEY_PASSWORD` | `ferelONDONGO1631@` |
 
-## Pousser vers GitHub OTG
-
-Dans le Shell Replit :
-```bash
-bash push.sh https://github.com/ferelking242/OTG.git
-```
-
 ## Modules
 
-- **:core** — DiskDevice, FileItem, ClipboardState, Extensions, ShellResult
+- **:core** — DiskDevice, FileItem, Extensions, ShellResult
 - **:usb** — UsbDeviceRepository (interface + impl), UsbBenchmarkManager, Hilt DI
 - **:storage** — FileRepository (interface + impl), SAF + DocumentFile, Hilt DI
-- **:app** — MainActivity, UsbBroadcastReceiver, DiskOperationService, ViewModels, Screens, Theme, Navigation
+- **:ps2** — IsoScanner, IsoEngine, UlCfgManager, DownloadEngine, FilesystemChecker, Ps2ViewModel, Ps2StudioScreen, UlCfgMergerScreen, Ps2DownloadScreen
+- **:app** — MainActivity (mode immersif), AppNavHost (dock fixe), Screens, Theme, Navigation
