@@ -1,12 +1,13 @@
 package com.usbdiskmanager.ps2.ui.components
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.Transform
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -14,14 +15,22 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.usbdiskmanager.ps2.data.scanner.IsoScanner
+import com.usbdiskmanager.ps2.domain.model.OutputDestination
 import com.usbdiskmanager.ps2.domain.model.Ps2Game
+import com.usbdiskmanager.ps2.util.MountInfo
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConversionDialog(
     game: Ps2Game,
+    availableUsbMounts: List<MountInfo>,
+    initialDestination: OutputDestination,
     onDismiss: () -> Unit,
-    onConvert: () -> Unit
+    onConvert: (OutputDestination) -> Unit
 ) {
+    var selectedDest by remember { mutableStateOf(initialDestination) }
+    var showDestMenu by remember { mutableStateOf(false) }
+
     Dialog(onDismissRequest = onDismiss) {
         Card(
             shape = RoundedCornerShape(20.dp),
@@ -30,7 +39,7 @@ fun ConversionDialog(
         ) {
             Column(
                 modifier = Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 // Title
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -53,9 +62,7 @@ fun ConversionDialog(
                 // Game info
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     InfoRow(label = "Jeu", value = game.title)
-                    if (game.gameId.isNotBlank()) {
-                        InfoRow(label = "ID", value = game.gameId)
-                    }
+                    if (game.gameId.isNotBlank()) InfoRow(label = "ID", value = game.gameId)
                     InfoRow(label = "Région", value = game.region)
                     InfoRow(label = "Taille", value = formatBytes(game.sizeMb))
                     val parts = (game.sizeMb + 1_073_741_823L) / 1_073_741_824L
@@ -64,29 +71,126 @@ fun ConversionDialog(
 
                 HorizontalDivider()
 
-                // Output info
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                // Destination picker
+                Text(
+                    text = "Destination de sortie",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                ExposedDropdownMenuBox(
+                    expanded = showDestMenu,
+                    onExpandedChange = { showDestMenu = it }
                 ) {
-                    Icon(
-                        Icons.Default.FolderOpen,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.tertiary,
-                        modifier = Modifier.size(20.dp)
+                    OutlinedTextField(
+                        value = selectedDest.displayLabel(IsoScanner.DEFAULT_UL_DIR),
+                        onValueChange = {},
+                        readOnly = true,
+                        leadingIcon = {
+                            Icon(
+                                when (selectedDest) {
+                                    is OutputDestination.Default -> Icons.Default.Folder
+                                    is OutputDestination.UsbDrive -> Icons.Default.Usb
+                                    is OutputDestination.Custom -> Icons.Default.FolderOpen
+                                },
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showDestMenu) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(),
+                        shape = RoundedCornerShape(10.dp),
+                        singleLine = true
                     )
-                    Column {
-                        Text(
-                            text = "Dossier de sortie",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+
+                    ExposedDropdownMenu(
+                        expanded = showDestMenu,
+                        onDismissRequest = { showDestMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(
+                                        "Défaut (interne)",
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        IsoScanner.DEFAULT_UL_DIR,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.Folder, contentDescription = null)
+                            },
+                            onClick = {
+                                selectedDest = OutputDestination.Default
+                                showDestMenu = false
+                            }
                         )
-                        Text(
-                            text = IsoScanner.DEFAULT_UL_DIR,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
+
+                        if (availableUsbMounts.isNotEmpty()) {
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
+                            availableUsbMounts.forEach { mount ->
+                                val label = mount.mountPoint.substringAfterLast('/')
+                                    .let { if (it.isBlank()) mount.mountPoint else it }
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(
+                                                "USB — $label",
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                            Text(
+                                                "${mount.mountPoint}  •  ${mount.fsType.uppercase()}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Usb, contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary)
+                                    },
+                                    onClick = {
+                                        selectedDest = OutputDestination.UsbDrive(
+                                            mountPoint = mount.mountPoint,
+                                            label = label
+                                        )
+                                        showDestMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (selectedDest is OutputDestination.UsbDrive) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Icon(
+                                Icons.Default.Info,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                modifier = Modifier.size(16.dp).padding(top = 1.dp)
+                            )
+                            Text(
+                                text = "Les fichiers UL seront écrits à la racine de la clé USB pour qu'OPL puisse les lire.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                        }
                     }
                 }
 
@@ -96,7 +200,7 @@ fun ConversionDialog(
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Text(
-                        text = "La conversion utilise un flux continu de 4 Mo — aucun chargement en RAM. La reprise automatique est activée.",
+                        text = "Conversion en flux 4 Mo — aucun chargement en RAM. Reprise automatique activée.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.padding(10.dp)
@@ -112,7 +216,7 @@ fun ConversionDialog(
                         Text("Annuler")
                     }
                     Button(
-                        onClick = onConvert,
+                        onClick = { onConvert(selectedDest) },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.primary
                         )
@@ -125,6 +229,140 @@ fun ConversionDialog(
             }
         }
     }
+}
+
+@Composable
+fun Fat32WarningDialog(
+    mount: com.usbdiskmanager.ps2.util.MountInfo?,
+    onProceedAnyway: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                Icons.Default.Warning,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error
+            )
+        },
+        title = {
+            Text(
+                "USB non FAT32",
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "La clé USB ${mount?.mountPoint ?: ""} est en " +
+                    "${mount?.fsType?.uppercase() ?: "format inconnu"}."
+                )
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "⚠ OPL sur PS2 ne peut lire que les clés USB en FAT32. " +
+                               "Si vous continuez, les jeux ne seront pas lisibles par l'OPL.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(10.dp)
+                    )
+                }
+                Text(
+                    text = "Formater en FAT32 depuis l'onglet USB de l'application avant de continuer est fortement recommandé.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onProceedAnyway,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error
+                )
+            ) {
+                Text("Continuer quand même")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text("Annuler")
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BatchConversionDialog(
+    count: Int,
+    availableUsbMounts: List<com.usbdiskmanager.ps2.util.MountInfo>,
+    initialDestination: OutputDestination,
+    onDismiss: () -> Unit,
+    onConvert: (OutputDestination) -> Unit
+) {
+    var selectedDest by remember { mutableStateOf(initialDestination) }
+    var showDestMenu by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(Icons.Default.Transform, contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary)
+        },
+        title = { Text("Convertir $count jeu(x)", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("$count ISO(s) sélectionné(s) seront convertis en format UL.")
+
+                Text("Destination :", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                ExposedDropdownMenuBox(
+                    expanded = showDestMenu,
+                    onExpandedChange = { showDestMenu = it }
+                ) {
+                    OutlinedTextField(
+                        value = selectedDest.displayLabel(IsoScanner.DEFAULT_UL_DIR),
+                        onValueChange = {},
+                        readOnly = true,
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showDestMenu) },
+                        modifier = Modifier.fillMaxWidth().menuAnchor(),
+                        shape = RoundedCornerShape(10.dp),
+                        singleLine = true
+                    )
+                    ExposedDropdownMenu(expanded = showDestMenu, onDismissRequest = { showDestMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Défaut (interne)") },
+                            leadingIcon = { Icon(Icons.Default.Folder, null) },
+                            onClick = { selectedDest = OutputDestination.Default; showDestMenu = false }
+                        )
+                        availableUsbMounts.forEach { mount ->
+                            val label = mount.mountPoint.substringAfterLast('/').ifBlank { mount.mountPoint }
+                            DropdownMenuItem(
+                                text = { Text("USB — $label (${mount.fsType.uppercase()})") },
+                                leadingIcon = { Icon(Icons.Default.Usb, null) },
+                                onClick = {
+                                    selectedDest = OutputDestination.UsbDrive(mount.mountPoint, label)
+                                    showDestMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConvert(selectedDest) }) {
+                Text("Convertir tout")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) { Text("Annuler") }
+        }
+    )
 }
 
 @Composable
