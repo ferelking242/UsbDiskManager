@@ -36,7 +36,6 @@ fun DiskDetailScreen(
     viewModel: DiskDetailViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val shizukuReady by viewModel.shizukuReady.collectAsStateWithLifecycle()
     var showLabelDialog by remember { mutableStateOf(false) }
     var formatLabel by remember { mutableStateOf("") }
 
@@ -190,7 +189,6 @@ fun DiskDetailScreen(
             FormatCard(
                 isFormatting = uiState.isFormatting,
                 selectedFormat = uiState.selectedFormatType,
-                shizukuReady = shizukuReady,
                 onFormatTypeChange = { viewModel.setFormatType(it) },
                 onFormatClick = {
                     showLabelDialog = true
@@ -371,14 +369,10 @@ private fun BenchmarkCard(
 private fun FormatCard(
     isFormatting: Boolean,
     selectedFormat: String,
-    shizukuReady: Boolean,
     onFormatTypeChange: (String) -> Unit,
     onFormatClick: () -> Unit
 ) {
-    // FAT32 and exFAT work without Shizuku; NTFS and EXT4 require it.
-    val shizukuFormats = setOf("NTFS", "EXT4")
     val formatOptions = listOf("FAT32", "exFAT", "NTFS", "EXT4")
-    val selectedNeedsShizuku = selectedFormat in shizukuFormats && !shizukuReady
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -408,43 +402,6 @@ private fun FormatCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-
-            // Shizuku requirement info
-            if (!shizukuReady) {
-                Spacer(Modifier.height(8.dp))
-                Surface(
-                    color = androidx.compose.ui.graphics.Color(0xFFFFF8E1),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.Info,
-                            null,
-                            tint = androidx.compose.ui.graphics.Color(0xFFE65100),
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Column {
-                            Text(
-                                "FAT32 & exFAT available now",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = androidx.compose.ui.graphics.Color(0xFFE65100)
-                            )
-                            Text(
-                                "NTFS & EXT4 require Shizuku (start it from the banner above)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = androidx.compose.ui.graphics.Color(0xFFBF360C),
-                                fontSize = 10.sp
-                            )
-                        }
-                    }
-                }
-            }
-
             Spacer(Modifier.height(12.dp))
 
             // File system picker
@@ -452,45 +409,18 @@ private fun FormatCard(
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 formatOptions.forEach { fs ->
-                    val needsShizuku = fs in shizukuFormats && !shizukuReady
                     FilterChip(
                         selected = selectedFormat == fs,
                         onClick = { onFormatTypeChange(fs) },
-                        enabled = !needsShizuku,
-                        label = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(fs)
-                                if (needsShizuku) {
-                                    Spacer(Modifier.width(2.dp))
-                                    Icon(
-                                        Icons.Default.Lock,
-                                        null,
-                                        modifier = Modifier.size(10.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
+                        label = { Text(fs) }
                     )
                 }
             }
-
-            // Warning when selected format needs Shizuku
-            if (selectedNeedsShizuku) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "⚠ $selectedFormat requires Shizuku to format. Start Shizuku from the banner above.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    fontSize = 11.sp
-                )
-            }
-
             Spacer(Modifier.height(12.dp))
 
             Button(
                 onClick = onFormatClick,
-                enabled = !isFormatting && !selectedNeedsShizuku,
+                enabled = !isFormatting,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.error
                 ),
