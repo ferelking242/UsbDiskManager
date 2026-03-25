@@ -96,6 +96,7 @@ dependencies {
     implementation(project(":core"))
     implementation(project(":usb"))
     implementation(project(":storage"))
+    implementation(project(":ps2"))
 
     implementation(libs.appcompat)
     implementation(libs.androidx.core.ktx)
