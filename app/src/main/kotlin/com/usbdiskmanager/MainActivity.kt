@@ -8,6 +8,8 @@ import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -57,7 +59,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        requestStoragePermission()
         requestNotificationPermission()
         startUsbMonitorService()
         handleUsbIntent(intent)
@@ -69,6 +70,12 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+
+        // Defer storage permission request so it doesn't block startup or crash
+        // when the app is launched by a USB attach intent.
+        Handler(Looper.getMainLooper()).postDelayed({
+            requestStoragePermission()
+        }, 800)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -78,8 +85,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Refresh device list every time app comes to foreground
-        usbRepository.refreshConnectedDevices()
+        try {
+            usbRepository.refreshConnectedDevices()
+        } catch (e: Exception) {
+            Timber.w(e, "refreshConnectedDevices failed in onResume")
+        }
     }
 
     private fun requestStoragePermission() {
@@ -121,16 +131,20 @@ class MainActivity : ComponentActivity() {
 
     private fun handleUsbIntent(intent: Intent?) {
         if (intent?.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
-            val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-            }
-            device?.let {
-                Timber.i("USB device attached via intent: ${it.deviceName}")
-                usbRepository.onDeviceAttached(it)
-                dashboardViewModel.onUsbDeviceAttached(it)
+            try {
+                val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                }
+                device?.let {
+                    Timber.i("USB device attached via intent: ${it.deviceName}")
+                    usbRepository.onDeviceAttached(it)
+                    dashboardViewModel.onUsbDeviceAttached(it)
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Error handling USB attach intent")
             }
         }
     }
