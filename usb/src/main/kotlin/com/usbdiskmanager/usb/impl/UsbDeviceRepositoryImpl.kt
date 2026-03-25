@@ -309,7 +309,9 @@ class UsbDeviceRepositoryImpl @Inject constructor(
                 ?: "USB Drive (${device.vendorId.toString(16).uppercase()}:${device.productId.toString(16).uppercase()})",
             vendorId = device.vendorId,
             productId = device.productId,
-            serialNumber = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) device.serialNumber else null,
+            serialNumber = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try { device.serialNumber } catch (_: SecurityException) { null }
+            } else null,
             totalSpace = total,
             freeSpace = free,
             usedSpace = total - free,
