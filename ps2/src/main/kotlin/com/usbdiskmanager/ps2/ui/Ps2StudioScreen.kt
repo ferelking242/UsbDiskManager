@@ -186,9 +186,10 @@ fun Ps2StudioScreen(
                         LazyColumn(
                             state = scrollState,
                             contentPadding = PaddingValues(
-                                horizontal = 16.dp,
-                                bottom = 96.dp, // space for dock
-                                top = 4.dp
+                                start = 16.dp,
+                                end = 16.dp,
+                                top = 4.dp,
+                                bottom = 96.dp // space for dock
                             ),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier.weight(1f)

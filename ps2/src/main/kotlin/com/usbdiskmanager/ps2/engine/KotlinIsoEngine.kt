@@ -214,7 +214,7 @@ class KotlinIsoEngine @Inject constructor() : IsoEngine {
         // Try primary sector, then fall back to supplementary descriptors (sectors 17-31)
         for (pvdSector in 16L..31L) {
             runCatching {
-                val pvd = readSectors(raf, si, pvdSector, 2048)
+                val pvd = readSectors(raf, si, pvdSector, 2048L)
                 if (pvd.length >= 7 && pvd[0].code == 0x01 && pvd.substring(1, 6) == "CD001") {
                     val bytes = pvd.toByteArray(Charsets.ISO_8859_1)
                     return parseDirRecord(bytes, 156)
@@ -247,7 +247,8 @@ class KotlinIsoEngine @Inject constructor() : IsoEngine {
                 continue
             }
             if (pos + recLen > buf.size) break
-            val rec = parseDirRecord(buf, pos) ?: run { pos += recLen; continue }
+            val rec = parseDirRecord(buf, pos)
+            if (rec == null) { pos += recLen; continue }
             if (!rec.isDir && rec.name.equals(target, ignoreCase = true)) return rec
             pos += recLen
         }
@@ -360,7 +361,7 @@ class KotlinIsoEngine @Inject constructor() : IsoEngine {
     private fun detectSectorLayout(file: File): SectorLayout {
         return runCatching {
             RandomAccessFile(file, "r").use { raf ->
-                if (file.length() < 12) return@use SectorLayout(SECTOR_2048, 0)
+                if (file.length() < 12) return@use SectorLayout(SECTOR_2048, 0L)
                 val sync = ByteArray(12)
                 raf.seek(0)
                 raf.read(sync)
@@ -374,10 +375,10 @@ class KotlinIsoEngine @Inject constructor() : IsoEngine {
                     val dataOffset = if (mode == 2) 24 else 16
                     SectorLayout(2352L, dataOffset.toLong())
                 } else {
-                    SectorLayout(SECTOR_2048, 0)
+                    SectorLayout(SECTOR_2048, 0L)
                 }
             }
-        }.getOrDefault(SectorLayout(SECTOR_2048, 0))
+        }.getOrDefault(SectorLayout(SECTOR_2048, 0L))
     }
 
     // ─────────────────────────────────────────────────────────────────────────
