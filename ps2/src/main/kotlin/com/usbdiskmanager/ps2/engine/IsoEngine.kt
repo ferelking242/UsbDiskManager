@@ -15,6 +15,9 @@ data class IsoInfo(
     val region: String       // "NTSC-U" | "NTSC-J" | "PAL" | "Unknown"
 )
 
+/** Maximum size of a single UL part file (1 GiB). Part of the UL format spec. */
+const val UL_PART_SIZE: Long = 1_073_741_824L
+
 /**
  * Engine abstraction for ISO operations.
  *
