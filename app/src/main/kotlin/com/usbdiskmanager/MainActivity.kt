@@ -8,9 +8,8 @@ import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
-import android.os.Handler
-import android.os.Looper
 import android.provider.Settings
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -18,6 +17,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.usbdiskmanager.service.UsbMonitorService
 import com.usbdiskmanager.ui.navigation.AppNavHost
 import com.usbdiskmanager.ui.theme.UsbDiskManagerTheme
@@ -58,7 +60,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        enableImmersiveMode()
 
+        requestStoragePermission()
         requestNotificationPermission()
         startUsbMonitorService()
         handleUsbIntent(intent)
@@ -70,12 +74,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
 
-        // Defer storage permission request so it doesn't block startup or crash
-        // when the app is launched by a USB attach intent.
-        Handler(Looper.getMainLooper()).postDelayed({
-            requestStoragePermission()
-        }, 800)
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) enableImmersiveMode()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -85,10 +88,19 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        try {
-            usbRepository.refreshConnectedDevices()
-        } catch (e: Exception) {
-            Timber.w(e, "refreshConnectedDevices failed in onResume")
+        enableImmersiveMode()
+        usbRepository.refreshConnectedDevices()
+    }
+
+    private fun enableImmersiveMode() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.hide(WindowInsetsCompat.Type.navigationBars())
+        controller.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
     }
 
@@ -131,20 +143,16 @@ class MainActivity : ComponentActivity() {
 
     private fun handleUsbIntent(intent: Intent?) {
         if (intent?.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
-            try {
-                val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-                }
-                device?.let {
-                    Timber.i("USB device attached via intent: ${it.deviceName}")
-                    usbRepository.onDeviceAttached(it)
-                    dashboardViewModel.onUsbDeviceAttached(it)
-                }
-            } catch (e: Exception) {
-                Timber.e(e, "Error handling USB attach intent")
+            val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+            }
+            device?.let {
+                Timber.i("USB device attached via intent: ${it.deviceName}")
+                usbRepository.onDeviceAttached(it)
+                dashboardViewModel.onUsbDeviceAttached(it)
             }
         }
     }
