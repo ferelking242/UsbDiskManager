@@ -480,15 +480,17 @@ class UsbDeviceRepositoryImpl @Inject constructor(
     private fun findBlockDeviceFromMounts(mountPoint: String): String? {
         for (mountFile in listOf("/proc/mounts", "/proc/self/mounts")) {
             try {
-                File(mountFile).forEachLine { line ->
-                    val parts = line.trim().split(Regex("\\s+"))
-                    if (parts.size >= 2 && parts[1] == mountPoint) {
-                        val dev = parts[0]
-                        if (dev.startsWith("/dev/") && !dev.contains("vold") && !dev.contains("fuse")) {
-                            return dev
-                        }
-                    }
+                val result = File(mountFile).useLines { lines ->
+                    lines
+                        .map { it.trim().split(Regex("\\s+")) }
+                        .firstOrNull { parts ->
+                            parts.size >= 2 && parts[1] == mountPoint &&
+                            parts[0].startsWith("/dev/") &&
+                            !parts[0].contains("vold") &&
+                            !parts[0].contains("fuse")
+                        }?.get(0)
                 }
+                if (result != null) return result
             } catch (_: Exception) {}
         }
         return null
