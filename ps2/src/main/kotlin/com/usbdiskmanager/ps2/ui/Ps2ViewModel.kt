@@ -19,6 +19,11 @@ import com.usbdiskmanager.ps2.domain.model.Ps2Download
 import com.usbdiskmanager.ps2.domain.model.Ps2Game
 import com.usbdiskmanager.ps2.domain.model.UsbGame
 import com.usbdiskmanager.ps2.domain.repository.Ps2Repository
+import com.usbdiskmanager.ps2.telegram.TelegramChannelConfig
+import com.usbdiskmanager.ps2.telegram.TelegramChannelService
+import com.usbdiskmanager.ps2.telegram.TelegramDownloadProgress
+import com.usbdiskmanager.ps2.telegram.TelegramGamePost
+import com.usbdiskmanager.ps2.telegram.TelegramSetupState
 import com.usbdiskmanager.ps2.ui.transfer.UsbTransferUiState
 import com.usbdiskmanager.ps2.util.FilesystemChecker
 import com.usbdiskmanager.ps2.util.MountInfo
@@ -32,6 +37,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import timber.log.Timber
+import java.io.File
 import javax.inject.Inject
 
 data class Ps2UiState(
@@ -70,7 +76,9 @@ data class Ps2UiState(
     val ulManagerError: String? = null,
     // Transfer multi-select
     val transferSelectedIds: Set<String> = emptySet(),
-    val transferSourceMount: String? = null
+    val transferSourceMount: String? = null,
+    // Telegram
+    val telegramState: TelegramUiState = TelegramUiState()
 ) {
     val filteredGames: List<Ps2Game>
         get() {
@@ -92,7 +100,17 @@ data class Ps2UiState(
 
 enum class SortMode { TITLE, SIZE, STATUS }
 
-enum class Ps2Tab { GAMES, MERGE_CFG, UL_MANAGER, DOWNLOAD, TRANSFER }
+enum class Ps2Tab { GAMES, MERGE_CFG, UL_MANAGER, DOWNLOAD, TRANSFER, TELEGRAM }
+
+data class TelegramUiState(
+    val isConfigured: Boolean = false,
+    val channels: List<TelegramChannelConfig> = emptyList(),
+    val selectedChannel: String? = null,
+    val allPosts: List<TelegramGamePost> = emptyList(),
+    val isLoading: Boolean = false,
+    val error: String? = null,
+    val downloads: Map<String, TelegramDownloadProgress> = emptyMap()
+)
 
 @HiltViewModel
 class Ps2ViewModel @Inject constructor(
@@ -103,7 +121,8 @@ class Ps2ViewModel @Inject constructor(
     private val transferManager: UsbGameTransferManager,
     private val searchService: IsoSearchService,
     private val ulCfgManager: UlCfgManager,
-    private val isoScanner: IsoScanner
+    private val isoScanner: IsoScanner,
+    private val telegramService: TelegramChannelService
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(Ps2UiState())
@@ -747,6 +766,158 @@ class Ps2ViewModel @Inject constructor(
     fun setTab(tab: Ps2Tab) {
         _uiState.update { it.copy(selectedTab = tab) }
         if (tab == Ps2Tab.TRANSFER) refreshTransferGames()
+        if (tab == Ps2Tab.TELEGRAM) loadTelegramState()
     }
     fun clearError() = _uiState.update { it.copy(errorMessage = null) }
+
+    // ── Telegram ─────────────────────────────────────────────────────────────
+
+    private fun loadTelegramState() {
+        val state = telegramService.getSetupState()
+        val channels = telegramService.getSavedChannels()
+        val isConfigured = state is TelegramSetupState.Ready
+        _uiState.update { s ->
+            s.copy(telegramState = s.telegramState.copy(
+                isConfigured = isConfigured,
+                channels = channels
+            ))
+        }
+        if (isConfigured && _uiState.value.telegramState.allPosts.isEmpty()) {
+            refreshTelegramPosts()
+        }
+    }
+
+    fun setupTelegram(sessionString: String, apiHash: String, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            val result = telegramService.saveSetup(sessionString, apiHash)
+            result.fold(
+                onSuccess = {
+                    val channels = telegramService.getSavedChannels()
+                    _uiState.update { s ->
+                        s.copy(telegramState = s.telegramState.copy(
+                            isConfigured = true,
+                            channels = channels,
+                            error = null
+                        ))
+                    }
+                    refreshTelegramPosts()
+                },
+                onFailure = { e ->
+                    onError(e.message ?: "Session string invalide")
+                }
+            )
+        }
+    }
+
+    fun disconnectTelegram() {
+        telegramService.clearSetup()
+        _uiState.update { s ->
+            s.copy(telegramState = TelegramUiState(isConfigured = false))
+        }
+    }
+
+    fun addTelegramChannel(username: String, name: String) {
+        telegramService.addChannel(username, name)
+        val channels = telegramService.getSavedChannels()
+        _uiState.update { s ->
+            s.copy(telegramState = s.telegramState.copy(channels = channels))
+        }
+    }
+
+    fun removeTelegramChannel(username: String) {
+        telegramService.removeChannel(username)
+        val channels = telegramService.getSavedChannels()
+        _uiState.update { s ->
+            s.copy(telegramState = s.telegramState.copy(
+                channels = channels,
+                selectedChannel = if (s.telegramState.selectedChannel == username) null
+                                  else s.telegramState.selectedChannel,
+                allPosts = s.telegramState.allPosts.filter { it.channelUsername != username }
+            ))
+        }
+    }
+
+    fun selectTelegramChannel(username: String?) {
+        _uiState.update { s ->
+            s.copy(telegramState = s.telegramState.copy(selectedChannel = username))
+        }
+        if (username != null && _uiState.value.telegramState.allPosts.none { it.channelUsername == username }) {
+            loadChannelPosts(username, beforeId = 0)
+        }
+    }
+
+    fun refreshTelegramPosts() {
+        val channels = _uiState.value.telegramState.channels
+        if (channels.isEmpty()) return
+        _uiState.update { s -> s.copy(telegramState = s.telegramState.copy(isLoading = true, error = null)) }
+        viewModelScope.launch {
+            val allPosts = mutableListOf<TelegramGamePost>()
+            channels.forEach { chan ->
+                try {
+                    val posts = telegramService.fetchChannelPostsWeb(chan.username)
+                    allPosts.addAll(posts)
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to load channel ${chan.username}")
+                }
+            }
+            _uiState.update { s ->
+                s.copy(telegramState = s.telegramState.copy(
+                    allPosts = allPosts.sortedByDescending { it.date },
+                    isLoading = false
+                ))
+            }
+        }
+    }
+
+    fun loadMoreTelegramPosts(channelUsername: String, beforeId: Int) {
+        loadChannelPosts(channelUsername, beforeId)
+    }
+
+    private fun loadChannelPosts(channelUsername: String, beforeId: Int) {
+        _uiState.update { s -> s.copy(telegramState = s.telegramState.copy(isLoading = true)) }
+        viewModelScope.launch {
+            try {
+                val posts = telegramService.fetchChannelPostsWeb(channelUsername, beforeId)
+                _uiState.update { s ->
+                    val existing = s.telegramState.allPosts
+                        .filter { it.channelUsername != channelUsername || beforeId == 0 }
+                    s.copy(telegramState = s.telegramState.copy(
+                        allPosts = (existing + posts).sortedByDescending { it.date },
+                        isLoading = false
+                    ))
+                }
+            } catch (e: Exception) {
+                _uiState.update { s ->
+                    s.copy(telegramState = s.telegramState.copy(
+                        isLoading = false,
+                        error = "Erreur canal @$channelUsername: ${e.message}"
+                    ))
+                }
+            }
+        }
+    }
+
+    fun downloadTelegramGame(post: TelegramGamePost) {
+        val key = post.messageId.toString()
+        if (_uiState.value.telegramState.downloads[key]?.run { !isDone && error == null } == true) return
+        val outDir = File(IsoScanner.BASE_DIR).also { it.mkdirs() }
+        viewModelScope.launch {
+            telegramService.downloadDocument(post, outDir)
+                .collect { progress ->
+                    _uiState.update { s ->
+                        s.copy(telegramState = s.telegramState.copy(
+                            downloads = s.telegramState.downloads + (key to progress)
+                        ))
+                    }
+                    if (progress.isDone) {
+                        Timber.d("Download complete: ${post.fileName}")
+                        scan()
+                    }
+                }
+        }
+    }
+
+    fun clearTelegramError() {
+        _uiState.update { s -> s.copy(telegramState = s.telegramState.copy(error = null)) }
+    }
 }

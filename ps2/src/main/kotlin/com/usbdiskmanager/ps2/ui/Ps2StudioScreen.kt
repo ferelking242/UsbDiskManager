@@ -202,8 +202,9 @@ fun Ps2StudioScreen(
                                         Ps2Tab.GAMES      -> "Jeux"
                                         Ps2Tab.MERGE_CFG  -> "Fusionner CFG"
                                         Ps2Tab.UL_MANAGER -> "UL Manager"
-                                        Ps2Tab.DOWNLOAD   -> "Télécharger"
+                                        Ps2Tab.DOWNLOAD   -> "Archive.org"
                                         Ps2Tab.TRANSFER   -> "Transfert"
+                                        Ps2Tab.TELEGRAM   -> "Telegram"
                                     },
                                     fontWeight = if (uiState.selectedTab == tab)
                                         FontWeight.Bold else FontWeight.Normal
@@ -217,6 +218,7 @@ fun Ps2StudioScreen(
                                         Ps2Tab.UL_MANAGER -> Icons.Default.ManageSearch
                                         Ps2Tab.DOWNLOAD   -> Icons.Default.Download
                                         Ps2Tab.TRANSFER   -> Icons.Default.SwapHoriz
+                                        Ps2Tab.TELEGRAM   -> Icons.Default.Send
                                     },
                                     contentDescription = null,
                                     modifier = Modifier.size(18.dp)
@@ -253,6 +255,7 @@ fun Ps2StudioScreen(
                     Ps2Tab.UL_MANAGER -> UlManagerScreen(viewModel = viewModel)
                     Ps2Tab.DOWNLOAD   -> Ps2DownloadScreen(viewModel = viewModel)
                     Ps2Tab.TRANSFER   -> UsbTransferScreen(viewModel = viewModel)
+                    Ps2Tab.TELEGRAM   -> TelegramDownloadScreen(viewModel = viewModel)
                 }
             }
         }
