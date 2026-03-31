@@ -28,6 +28,12 @@
 # Keep Compose
 -keep class androidx.compose.** { *; }
 
+# ── TDLib — MUST keep all classes accessed by libtdjni.so via JNI ────────────
+-keep class org.drinkless.tdlib.** { *; }
+-keepclassmembers class org.drinkless.tdlib.** { *; }
+-keepnames class org.drinkless.tdlib.** { *; }
+-keepattributes *Annotation*, Signature, InnerClasses, EnclosingMethod
+
 # Remove logging in release
 -assumenosideeffects class timber.log.Timber {
     public static *** v(...);
