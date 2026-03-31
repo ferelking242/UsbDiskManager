@@ -10,7 +10,7 @@ import com.usbdiskmanager.ps2.domain.model.ConversionJob
 
 @Database(
     entities = [ConversionJob::class, TelegramDownloadEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class Ps2Database : RoomDatabase() {

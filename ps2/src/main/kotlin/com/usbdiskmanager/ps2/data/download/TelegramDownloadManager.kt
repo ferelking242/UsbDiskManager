@@ -38,8 +38,8 @@ data class TgDownloadProgress(
     val speedFormatted: String
         get() = when {
             speedBytesPerSec > 1_000_000 -> "%.1f MB/s".format(speedBytesPerSec / 1e6)
-            speedBytesPerSec > 1_000 -> "%.0f KB/s".format(speedBytesPerSec / 1e3)
-            else -> "${speedBytesPerSec} B/s"
+            speedBytesPerSec > 1_000     -> "%.0f KB/s".format(speedBytesPerSec / 1e3)
+            else                         -> "${speedBytesPerSec} B/s"
         }
     val etaSeconds: Long
         get() = if (speedBytesPerSec > 0 && totalBytes > bytesDownloaded)
@@ -59,8 +59,8 @@ class TelegramDownloadManager @Inject constructor(
     private val _downloads = MutableStateFlow<Map<String, TgDownloadProgress>>(emptyMap())
     val downloads: StateFlow<Map<String, TgDownloadProgress>> = _downloads.asStateFlow()
 
-    private val activeJobs = mutableMapOf<String, Job>()
-    private val speedTracker = mutableMapOf<String, Pair<Long, Long>>()
+    private val activeJobs    = mutableMapOf<String, Job>()
+    private val speedTracker  = mutableMapOf<String, Pair<Long, Long>>()
 
     init {
         scope.launch { observeFileUpdates() }
@@ -76,14 +76,16 @@ class TelegramDownloadManager @Inject constructor(
             if (existing?.status == TgDownloadStatus.DONE) return@launch
             if (activeJobs[id]?.isActive == true) return@launch
 
-            val destDir = File(IsoScanner.BASE_DIR).also { it.mkdirs() }
-            val entity = TelegramDownloadEntity(
-                id = id,
-                channelUsername = post.channelUsername,
-                messageId = post.messageId,
-                fileName = post.fileName,
-                fileSizeBytes = post.fileSizeBytes,
-                destPath = File(destDir, post.fileName).absolutePath
+            val destDir  = File(IsoScanner.BASE_DIR).also { it.mkdirs() }
+            val entity   = TelegramDownloadEntity(
+                id                  = id,
+                channelUsername     = post.channelUsername,
+                messageId           = post.messageId,
+                fileName            = post.fileName,
+                fileSizeBytes       = post.fileSizeBytes,
+                // Store the real TDLib message ID so getMessage() works correctly
+                tdlibFullMessageId  = post.tdlibFirstFileMessageId,
+                destPath            = File(destDir, post.fileName).absolutePath
             )
             dao.upsert(entity)
             setProgress(entity, 0L, TgDownloadStatus.QUEUED)
@@ -98,7 +100,12 @@ class TelegramDownloadManager @Inject constructor(
             val entity = dao.getDownload(id) ?: return@launch
             if (entity.tdlibFileId > 0) tdlib.cancelDownload(entity.tdlibFileId)
             dao.updateStatus(id, TgDownloadStatus.ERROR, "Annulé")
-            _downloads.update { it + (id to TgDownloadProgress(id, entity.fileName, 0L, entity.fileSizeBytes, TgDownloadStatus.ERROR, error = "Annulé")) }
+            _downloads.update {
+                it + (id to TgDownloadProgress(
+                    id, entity.fileName, 0L, entity.fileSizeBytes,
+                    TgDownloadStatus.ERROR, error = "Annulé"
+                ))
+            }
         }
     }
 
@@ -110,10 +117,17 @@ class TelegramDownloadManager @Inject constructor(
                 dao.updateProgress(entity.id, TgDownloadStatus.DOWNLOADING, 0L)
                 setProgress(entity, 0L, TgDownloadStatus.DOWNLOADING)
 
-                val chat = tdlib.searchPublicChat(entity.channelUsername)
-                val message = tdlib.getMessage(chat.id, entity.messageId.toLong())
-                val fileId = extractFileId(message)
-                    ?: error("No downloadable file in message ${entity.messageId}")
+                val chat   = tdlib.searchPublicChat(entity.channelUsername)
+
+                // Use the stored TDLib full message ID if available;
+                // fall back to converting the URL post number (best-effort).
+                val msgId = when {
+                    entity.tdlibFullMessageId > 0L -> entity.tdlibFullMessageId
+                    else -> entity.messageId.toLong() shl 20
+                }
+                val message = tdlib.getMessage(chat.id, msgId)
+                val fileId  = extractFileId(message)
+                    ?: error("No downloadable file in message for ${entity.fileName}")
 
                 dao.updateFileInfo(entity.id, fileId, chat.id)
                 tdlib.startDownload(fileId, priority = 32)
@@ -168,30 +182,31 @@ class TelegramDownloadManager @Inject constructor(
     }
 
     private suspend fun handleFileUpdate(update: TdApi.UpdateFile) {
-        val file = update.file
-        val all = dao.getPendingDownloads()
+        val file   = update.file
+        val all    = dao.getPendingDownloads()
         val entity = all.firstOrNull { it.tdlibFileId == file.id } ?: return
 
         val downloaded = file.local?.downloadedSize ?: 0L
-        val total = file.expectedSize.takeIf { it > 0L } ?: entity.fileSizeBytes
+        val total      = file.expectedSize.takeIf { it > 0L } ?: entity.fileSizeBytes
         val isComplete = file.local?.isDownloadingCompleted ?: false
 
         if (isComplete && file.local?.path != null) {
             finalize(entity.id, file.local!!.path!!)
         } else if (file.local?.isDownloadingActive == true) {
-            val now = System.currentTimeMillis()
+            val now              = System.currentTimeMillis()
             val (lastBytes, lastTime) = speedTracker[entity.id] ?: Pair(0L, now)
-            val speed = if (now > lastTime) ((downloaded - lastBytes) * 1000L) / (now - lastTime) else 0L
+            val speed = if (now > lastTime)
+                ((downloaded - lastBytes) * 1000L) / (now - lastTime) else 0L
             speedTracker[entity.id] = Pair(downloaded, now)
 
             dao.updateProgress(entity.id, TgDownloadStatus.DOWNLOADING, downloaded)
             _downloads.update {
                 it + (entity.id to TgDownloadProgress(
-                    id = entity.id,
-                    fileName = entity.fileName,
-                    bytesDownloaded = downloaded,
-                    totalBytes = total,
-                    status = TgDownloadStatus.DOWNLOADING,
+                    id               = entity.id,
+                    fileName         = entity.fileName,
+                    bytesDownloaded  = downloaded,
+                    totalBytes       = total,
+                    status           = TgDownloadStatus.DOWNLOADING,
                     speedBytesPerSec = speed.coerceAtLeast(0L)
                 ))
             }
@@ -213,11 +228,11 @@ class TelegramDownloadManager @Inject constructor(
             activeJobs.remove(id)
             _downloads.update {
                 it + (id to TgDownloadProgress(
-                    id = id,
-                    fileName = entity.fileName,
+                    id              = id,
+                    fileName        = entity.fileName,
                     bytesDownloaded = entity.fileSizeBytes,
-                    totalBytes = entity.fileSizeBytes,
-                    status = TgDownloadStatus.DONE
+                    totalBytes      = entity.fileSizeBytes,
+                    status          = TgDownloadStatus.DONE
                 ))
             }
             Timber.i("Download done: ${entity.fileName} → ${entity.destPath}")
@@ -227,26 +242,22 @@ class TelegramDownloadManager @Inject constructor(
         }
     }
 
-    private fun setProgress(
-        entity: TelegramDownloadEntity,
-        bytes: Long,
-        status: TgDownloadStatus
-    ) {
+    private fun setProgress(entity: TelegramDownloadEntity, bytes: Long, status: TgDownloadStatus) {
         _downloads.update {
             it + (entity.id to TgDownloadProgress(
-                id = entity.id,
-                fileName = entity.fileName,
+                id              = entity.id,
+                fileName        = entity.fileName,
                 bytesDownloaded = bytes,
-                totalBytes = entity.fileSizeBytes,
-                status = status
+                totalBytes      = entity.fileSizeBytes,
+                status          = status
             ))
         }
     }
 
     private fun extractFileId(message: TdApi.Message): Int? = when (val c = message.content) {
         is TdApi.MessageDocument -> c.document?.document?.id
-        is TdApi.MessageVideo -> c.video?.video?.id
-        is TdApi.MessageAudio -> c.audio?.audio?.id
+        is TdApi.MessageVideo    -> c.video?.video?.id
+        is TdApi.MessageAudio    -> c.audio?.audio?.id
         else -> null
     }
 

@@ -994,7 +994,7 @@ class Ps2ViewModel @Inject constructor(
                             s.copy(telegramState = s.telegramState.copy(
                                 allPosts = s.telegramState.allPosts.map { p ->
                                     if (p.channelUsername == post.channelUsername && p.messageId == post.messageId)
-                                        p.copy(thumbnailUrl = "file://$file")
+                                        p.copy(coverPhotoUrl = "file://$file")
                                     else p
                                 }
                             ))

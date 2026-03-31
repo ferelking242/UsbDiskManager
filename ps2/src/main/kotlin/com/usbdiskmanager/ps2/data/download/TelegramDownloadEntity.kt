@@ -1,5 +1,6 @@
 package com.usbdiskmanager.ps2.data.download
 
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Entity
 import androidx.room.Insert
@@ -14,11 +15,15 @@ enum class TgDownloadStatus { QUEUED, DOWNLOADING, PAUSED, DONE, ERROR }
 data class TelegramDownloadEntity(
     @PrimaryKey val id: String,
     val channelUsername: String,
-    val messageId: Int,
+    val messageId: Int,                             // Telegram URL post number (for UI / deep links)
     val fileName: String,
     val fileSizeBytes: Long,
     val tdlibFileId: Int = 0,
     val tdlibChatId: Long = 0,
+    /** Actual TDLib message ID of the file message.
+     *  Needed for getMessage() — the URL post number is NOT valid there. */
+    @ColumnInfo(name = "tdlib_full_message_id", defaultValue = "0")
+    val tdlibFullMessageId: Long = 0L,
     val destPath: String,
     val status: TgDownloadStatus = TgDownloadStatus.QUEUED,
     val bytesDownloaded: Long = 0,

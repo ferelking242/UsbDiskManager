@@ -5,7 +5,6 @@ import android.content.SharedPreferences
 import androidx.core.content.edit
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import org.drinkless.tdlib.TdApi
@@ -13,58 +12,91 @@ import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
 
-// ─── Domain models ────────────────────────────────────────────────────────────
+// ─── File part (one physical file of a possibly multi-part game) ──────────────
 
-data class TelegramChannelConfig(
-    val username: String,
-    val displayName: String,
-    val id: Long = 0L,
-    val accessHash: Long = 0L
-)
-
-data class TelegramGamePost(
-    val messageId: Int,
-    val channelUsername: String,
-    val title: String,
-    val description: String,
-    val region: String,
-    val gameId: String,
-    val fileName: String,
+data class TelegramFilePart(
+    val partNumber: Int,           // 1-based (1 for single-file games)
+    val tdlibMessageId: Long,      // Actual TDLib message ID of this document message
+    val fileName: String,          // Full file name: "GameName.part1.rar"
+    val fileExtension: String,     // Lowercase: ".rar", ".7z", ".iso", ".zip", ".bin", ".chd"
     val fileSizeBytes: Long,
     val mimeType: String,
-    val documentId: Long = 0L,
-    val accessHash: Long = 0L,
-    val fileReference: ByteArray = ByteArray(0),
-    val dcId: Int = 0,
-    val coverPhotoId: Long = 0L,
-    val thumbnailUrl: String? = null,
-    // TDLib native fields (populated when fetched via TDLib, 0 when web-scraped)
-    val tdlibMessageId: Long = 0L,
-    val tdlibChatId: Long = 0L,
-    val thumbnailFileId: Int = 0,
-    val date: Int = 0
-) {
-    val isIso
-        get() = mimeType.contains("iso", ignoreCase = true) ||
-            fileName.endsWith(".iso", ignoreCase = true) ||
-            fileName.endsWith(".bin", ignoreCase = true) ||
-            fileName.endsWith(".7z", ignoreCase = true) ||
-            fileName.endsWith(".zip", ignoreCase = true)
+    val tdlibFileId: Int = 0       // TDLib internal file ID (0 when web-scraped)
+)
 
-    val sizeFormatted
-        get() = when {
-            fileSizeBytes > 1_000_000_000L -> "%.1f GB".format(fileSizeBytes / 1e9)
-            fileSizeBytes > 1_000_000L -> "%.0f MB".format(fileSizeBytes / 1e6)
-            fileSizeBytes > 0L -> "%.0f KB".format(fileSizeBytes / 1e3)
-            else -> "?"
+// ─── Game post (assembled from a cluster of consecutive channel messages) ──────
+
+data class TelegramGamePost(
+    // ── Channel identity ──────────────────────────────────────────────────────
+    val channelUsername: String,
+    val tdlibChatId: Long = 0L,
+    val anchorMessageId: Long = 0L,  // TDLib msg ID of the metadata anchor message
+    val date: Int = 0,
+
+    // ── Parsed metadata ───────────────────────────────────────────────────────
+    val title: String,
+    val console: String = "PS2",
+    val genre: String = "",
+    val series: String = "",
+    val region: String = "",
+    val publisher: String = "",
+    val releaseDate: String = "",
+    val modes: String = "",
+    val description: String = "",
+    val gameId: String = "",         // PS2 serial e.g. "SLES-12345"
+
+    // ── Media ─────────────────────────────────────────────────────────────────
+    val coverPhotoFileId: Int = 0,      // TDLib file ID for the cover photo
+    val coverPhotoUrl: String? = null,  // Local path after download
+    val screenshotFileIds: List<Int> = emptyList(),
+
+    // ── Files ─────────────────────────────────────────────────────────────────
+    val fileParts: List<TelegramFilePart> = emptyList()
+) {
+    // ── Backward-compat helpers for existing UI & DownloadManager ─────────────
+
+    /** Telegram URL post number visible in t.me/channel/NNN. */
+    val messageId: Int
+        get() = if (anchorMessageId > 0L) (anchorMessageId ushr 20).toInt().coerceAtLeast(1)
+                else 1
+
+    /** TDLib message ID of the first file part — used to call getMessage() correctly. */
+    val tdlibFirstFileMessageId: Long
+        get() = fileParts.firstOrNull()?.tdlibMessageId ?: anchorMessageId
+
+    /** Alias for anchorMessageId — used by the ViewModel for pagination. */
+    val tdlibMessageId: Long
+        get() = anchorMessageId
+
+    val fileName: String       get() = fileParts.firstOrNull()?.fileName ?: ""
+    val fileSizeBytes: Long    get() = fileParts.sumOf { it.fileSizeBytes }
+    val mimeType: String       get() = fileParts.firstOrNull()?.mimeType ?: "application/octet-stream"
+    val documentId: Long       get() = fileParts.firstOrNull()?.tdlibFileId?.toLong() ?: 0L
+    val thumbnailFileId: Int   get() = coverPhotoFileId
+    val thumbnailUrl: String?  get() = coverPhotoUrl
+    val isMultiPart: Boolean   get() = fileParts.size > 1
+    val isIso: Boolean         get() = fileParts.any { it.fileExtension in GAME_EXTENSIONS }
+
+    val sizeFormatted: String
+        get() = fileSizeBytes.let { b ->
+            when {
+                b > 1_000_000_000L -> "%.1f GB".format(b / 1e9)
+                b > 1_000_000L     -> "%.0f MB".format(b / 1e6)
+                b > 0L             -> "%.0f KB".format(b / 1e3)
+                else               -> "?"
+            }
         }
 
     override fun equals(other: Any?) =
         other is TelegramGamePost &&
-            messageId == other.messageId &&
+            anchorMessageId == other.anchorMessageId &&
             channelUsername == other.channelUsername
 
-    override fun hashCode() = 31 * messageId + channelUsername.hashCode()
+    override fun hashCode() = 31 * anchorMessageId.hashCode() + channelUsername.hashCode()
+
+    companion object {
+        val GAME_EXTENSIONS = setOf(".iso", ".bin", ".7z", ".zip", ".rar", ".chd")
+    }
 }
 
 // ─── Auth states ──────────────────────────────────────────────────────────────
@@ -78,13 +110,22 @@ sealed class TelegramSetupState {
     data class Error(val message: String) : TelegramSetupState()
 }
 
-// ─── Prefs ────────────────────────────────────────────────────────────────────
+// ─── Channel config ───────────────────────────────────────────────────────────
 
-private const val PREFS_NAME = "telegram_prefs"
-private const val KEY_API_ID = "api_id"
+data class TelegramChannelConfig(
+    val username: String,
+    val displayName: String,
+    val id: Long = 0L,
+    val accessHash: Long = 0L
+)
+
+// ─── Internal prefs keys ──────────────────────────────────────────────────────
+
+private const val PREFS_NAME   = "telegram_prefs"
+private const val KEY_API_ID   = "api_id"
 private const val KEY_API_HASH = "api_hash"
 private const val KEY_CHANNELS = "channels"
-private const val KEY_PHONE = "phone"
+private const val KEY_PHONE    = "phone"
 
 private val DEFAULT_CHANNELS = listOf(
     TelegramChannelConfig("pcsx2iso", "Playstation 2 Roms"),
@@ -120,28 +161,22 @@ class TelegramChannelService @Inject constructor(
     }
 
     fun initializeTDLib() {
-        val apiId = getSavedApiId()
+        val apiId   = getSavedApiId()
         val apiHash = getSavedApiHash()
-        if (apiId > 0 && apiHash.isNotBlank()) {
-            tdlib.initialize(apiId, apiHash)
-        }
+        if (apiId > 0 && apiHash.isNotBlank()) tdlib.initialize(apiId, apiHash)
     }
 
     fun getSetupState(): TelegramSetupState {
-        if (getSavedApiId() <= 0 || getSavedApiHash().isBlank()) {
+        if (getSavedApiId() <= 0 || getSavedApiHash().isBlank())
             return TelegramSetupState.NotConfigured
-        }
         return when (tdlib.authState.value) {
-            is TdApi.AuthorizationStateReady -> TelegramSetupState.Ready
+            is TdApi.AuthorizationStateReady                -> TelegramSetupState.Ready
             is TdApi.AuthorizationStateWaitPhoneNumber,
-            is TdApi.AuthorizationStateWaitTdlibParameters ->
-                TelegramSetupState.WaitingPhoneNumber
-            is TdApi.AuthorizationStateWaitCode ->
-                TelegramSetupState.WaitingCode(getSavedPhone())
-            is TdApi.AuthorizationStateWaitPassword ->
-                TelegramSetupState.WaitingPassword
+            is TdApi.AuthorizationStateWaitTdlibParameters -> TelegramSetupState.WaitingPhoneNumber
+            is TdApi.AuthorizationStateWaitCode            -> TelegramSetupState.WaitingCode(getSavedPhone())
+            is TdApi.AuthorizationStateWaitPassword        -> TelegramSetupState.WaitingPassword
             null -> if (getSavedApiId() > 0) TelegramSetupState.WaitingPhoneNumber
-            else TelegramSetupState.NotConfigured
+                    else TelegramSetupState.NotConfigured
             else -> TelegramSetupState.WaitingPhoneNumber
         }
     }
@@ -176,29 +211,28 @@ class TelegramChannelService @Inject constructor(
     // ── Channel management ────────────────────────────────────────────────────
 
     fun getSavedChannels(): List<TelegramChannelConfig> {
-        val raw = prefs.getString(KEY_CHANNELS, null)
-        if (raw == null) return DEFAULT_CHANNELS
+        val raw = prefs.getString(KEY_CHANNELS, null) ?: return DEFAULT_CHANNELS
         return raw.split("|").mapNotNull { entry ->
-            val parts = entry.split(",")
-            if (parts.size >= 2) TelegramChannelConfig(
-                parts[0], parts[1],
-                parts.getOrNull(2)?.toLongOrNull() ?: 0L,
-                parts.getOrNull(3)?.toLongOrNull() ?: 0L
-            )
-            else null
+            val p = entry.split(",")
+            if (p.size >= 2) TelegramChannelConfig(
+                p[0], p[1],
+                p.getOrNull(2)?.toLongOrNull() ?: 0L,
+                p.getOrNull(3)?.toLongOrNull() ?: 0L
+            ) else null
         }.ifEmpty { DEFAULT_CHANNELS }
     }
 
     fun saveChannels(channels: List<TelegramChannelConfig>) {
-        val raw = channels.joinToString("|") {
-            "${it.username},${it.displayName},${it.id},${it.accessHash}"
+        prefs.edit {
+            putString(KEY_CHANNELS, channels.joinToString("|") {
+                "${it.username},${it.displayName},${it.id},${it.accessHash}"
+            })
         }
-        prefs.edit { putString(KEY_CHANNELS, raw) }
     }
 
     fun addChannel(username: String, name: String) {
         val current = getSavedChannels().toMutableList()
-        val clean = username.removePrefix("@").removePrefix("https://t.me/").trim()
+        val clean   = username.removePrefix("@").removePrefix("https://t.me/").trim()
         if (current.none { it.username == clean }) {
             current.add(TelegramChannelConfig(clean, name.ifBlank { "@$clean" }))
             saveChannels(current)
@@ -209,176 +243,343 @@ class TelegramChannelService @Inject constructor(
         saveChannels(getSavedChannels().filter { it.username != username })
     }
 
-    // ── TDLib native channel indexing (when authenticated) ────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // TDLib NATIVE INDEXING
+    // ══════════════════════════════════════════════════════════════════════════
 
     /**
-     * Fetch up to [limit] game posts from a channel using TDLib directly.
-     * [fromTdlibId] = 0 means "start from the latest message".
-     * Returns posts sorted newest-first.
+     * Fetches a batch of messages and returns only complete game posts.
+     * Each post has all metadata, cover photo, description, and file parts assembled.
+     *
+     * [fromTdlibId] = 0  → start from the very latest message.
      */
     suspend fun fetchChannelPostsTDLib(
         channelUsername: String,
         fromTdlibId: Long = 0L,
-        limit: Int = 50
+        limit: Int = 100
     ): List<TelegramGamePost> = kotlinx.coroutines.withContext(Dispatchers.IO) {
-        val chat = tdlib.searchPublicChat(channelUsername)
-        val messages = tdlib.getChatHistory(chat.id, fromTdlibId, limit)
-        val result = mutableListOf<TelegramGamePost>()
-        for (msg in messages.messages ?: emptyArray()) {
-            parseTdlibMessage(msg, channelUsername, chat.id)?.let { result.add(it) }
-        }
-        result
+        val chat     = tdlib.searchPublicChat(channelUsername)
+        val batch    = tdlib.getChatHistory(chat.id, fromTdlibId, limit)
+        val messages = batch.messages?.toList() ?: return@withContext emptyList()
+        // getChatHistory returns newest-first → sort ascending for forward-scan
+        buildGameGroups(messages.sortedBy { it.id }, channelUsername, chat.id)
     }
 
-    private fun parseTdlibMessage(
-        msg: TdApi.Message,
+    // ══════════════════════════════════════════════════════════════════════════
+    // CORE ALGORITHM
+    // ══════════════════════════════════════════════════════════════════════════
+    //
+    // The channel posts a PS2 game as a cluster of consecutive messages:
+    //
+    //   [Photo]               ← game cover  (optional, before or as anchor)
+    //   [Photo/Text]          ← ANCHOR: contains "Console : PS2" + Genre/Region/…
+    //   [Text]                ← game description  (optional)
+    //   [Photo] …             ← gameplay screenshots  (optional)
+    //   [System requirements] ← noise → skipped
+    //   [Document] …          ← one or more ISO / archive file parts
+    //   ── next game starts ──
+    //
+    // The algorithm scans messages in ascending order (oldest first), identifies
+    // anchors, then collects all subsequent messages until the next anchor.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private fun buildGameGroups(
+        messages: List<TdApi.Message>,   // sorted ascending by TDLib message ID
         channelUsername: String,
         chatId: Long
-    ): TelegramGamePost? {
-        val docContent = msg.content as? TdApi.MessageDocument ?: return null
-        val doc = docContent.document
-        val fileName = doc.fileName?.takeIf { it.isNotBlank() } ?: return null
-        if (GAME_EXTENSIONS.none { fileName.endsWith(it, ignoreCase = true) }) return null
+    ): List<TelegramGamePost> {
 
-        val caption = docContent.caption?.text ?: ""
-        if (isSpam(caption)) return null
+        val groups = mutableListOf<TelegramGamePost>()
+        val n = messages.size
+        var i = 0
 
-        // In TDLib, channel message IDs are: postNumber << 20
-        val urlPostNumber = (msg.id ushr 20).toInt().coerceAtLeast(msg.id.toInt())
+        while (i < n) {
+            val msg     = messages[i]
+            val msgText = extractMessageText(msg)
 
-        // Thumbnail: use cached local path if already downloaded, otherwise store fileId
-        val thumb = doc.thumbnail
-        val thumbFileId = thumb?.file?.id ?: 0
-        val thumbLocal = thumb?.file?.local
-        val thumbUrl = if (thumbLocal != null && thumbLocal.isDownloadingCompleted && thumbLocal.path.isNotBlank())
-            "file://${thumbLocal.path}"
-        else null
+            // Skip Telegram service/system notifications
+            if (isServiceMessage(msg))                         { i++; continue }
+            // Skip noise messages
+            if (msgText.isNotBlank() && isNoise(msgText))      { i++; continue }
+            // Not a game anchor → keep scanning
+            if (!hasGameMetadata(msgText))                     { i++; continue }
 
-        val combined = "$caption $fileName"
-        return TelegramGamePost(
-            messageId = urlPostNumber,
-            channelUsername = channelUsername,
-            title = extractTitle(caption, fileName),
-            description = caption.take(300),
-            region = extractRegion(combined),
-            gameId = extractGameId(combined),
-            fileName = fileName,
-            fileSizeBytes = doc.document.size,
-            mimeType = doc.mimeType ?: "application/octet-stream",
-            documentId = doc.document.id.toLong(),
-            thumbnailUrl = thumbUrl,
-            thumbnailFileId = thumbFileId,
-            tdlibMessageId = msg.id,
-            tdlibChatId = chatId,
-            date = msg.date
-        )
+            // ═══════════════════════ ANCHOR FOUND ════════════════════════════
+
+            // Cover photo logic:
+            //   Case A: the anchor IS a photo (caption = metadata) → cover = this photo
+            //   Case B: anchor is a text message → look backward up to 5 msgs for a photo
+            var coverFileId = 0
+            if (msg.content is TdApi.MessagePhoto) {
+                coverFileId = extractPhotoThumbnailId(msg)
+            } else {
+                for (j in (i - 1) downTo maxOf(0, i - 5)) {
+                    val prev = messages[j]
+                    if (prev.content is TdApi.MessagePhoto &&
+                        !hasGameMetadata(extractMessageText(prev))) {
+                        coverFileId = extractPhotoThumbnailId(prev)
+                        break
+                    }
+                }
+            }
+
+            // Parse all metadata fields from the anchor text
+            val title       = parseTitle(msgText)
+            val genre       = parseField(msgText, "Genre")
+            val series      = parseField(msgText, "Series")
+            val region      = parseRegion(msgText)
+            val publisher   = parseField(msgText, "Publisher")
+            val releaseDate = parseField(msgText, listOf("Released", "Release Date"))
+            val modes       = parseField(msgText, listOf("Mode(s)", "Modes", "Mode"))
+            val gameId      = parseGameSerial(msgText)
+
+            // Scan FORWARD: collect description, screenshots, and file parts
+            var description = ""
+            val screenshots = mutableListOf<Int>()
+            val fileParts   = mutableListOf<TelegramFilePart>()
+            var j           = i + 1
+
+            while (j < n) {
+                val next     = messages[j]
+                val nextText = extractMessageText(next)
+
+                // Hit the next game anchor → this group is done
+                if (!isServiceMessage(next) && hasGameMetadata(nextText)) break
+
+                if (isServiceMessage(next))                              { j++; continue }
+                if (nextText.isNotBlank() && isNoise(nextText))          { j++; continue }
+
+                when (val content = next.content) {
+
+                    is TdApi.MessageText -> {
+                        val text = content.text?.text ?: ""
+                        if (description.isBlank() && isDescriptionText(text)) {
+                            description = text
+                                .replaceFirst(
+                                    Regex("^Description\\s*:?\\s*", RegexOption.IGNORE_CASE), ""
+                                ).trim()
+                        }
+                    }
+
+                    is TdApi.MessagePhoto -> {
+                        // Photos after the anchor are gameplay screenshots
+                        val id = extractPhotoThumbnailId(next)
+                        if (id > 0) screenshots.add(id)
+                    }
+
+                    is TdApi.MessageDocument -> {
+                        val doc      = content.document ?: run { j++; continue }
+                        val fileName = doc.fileName?.takeIf { it.isNotBlank() }
+                            ?: run { j++; continue }
+                        val ext = fileExtension(fileName)
+                        // Must be a game format
+                        if (ext !in TelegramGamePost.GAME_EXTENSIONS)    { j++; continue }
+                        // Must be big enough to be a real game (not a tiny attachment)
+                        if (doc.document.size < MIN_GAME_FILE_BYTES)     { j++; continue }
+
+                        fileParts.add(
+                            TelegramFilePart(
+                                partNumber     = detectPartNumber(fileName, fileParts.size + 1),
+                                tdlibMessageId = next.id,
+                                fileName       = fileName,
+                                fileExtension  = ext,
+                                fileSizeBytes  = doc.document.size,
+                                mimeType       = mimeForExtension(ext),
+                                tdlibFileId    = doc.document.id
+                            )
+                        )
+                    }
+
+                    else -> { /* polls, videos, audio, stickers → ignored */ }
+                }
+                j++
+            }
+
+            // Only emit a game post if at least one downloadable file was found
+            if (fileParts.isNotEmpty()) {
+                groups.add(
+                    TelegramGamePost(
+                        channelUsername   = channelUsername,
+                        tdlibChatId       = chatId,
+                        anchorMessageId   = msg.id,
+                        date              = msg.date,
+                        title             = title,
+                        genre             = genre,
+                        series            = series,
+                        region            = region,
+                        publisher         = publisher,
+                        releaseDate       = releaseDate,
+                        modes             = modes,
+                        description       = description,
+                        gameId            = gameId,
+                        coverPhotoFileId  = coverFileId,
+                        screenshotFileIds = screenshots.toList(),
+                        fileParts         = fileParts.toList()
+                    )
+                )
+            }
+
+            // Advance past all messages consumed by this group
+            i = j
+        }
+
+        return groups
     }
 
-    /**
-     * Downloads a TDLib file (thumbnail) and returns its local file path,
-     * or null if it fails or is already not available.
-     */
+    // ── Thumbnail download via TDLib ───────────────────────────────────────────
+
     suspend fun downloadThumbnail(fileId: Int): String? = runCatching {
         val file = tdlib.startDownload(fileId, priority = 1)
         if (file.local.isDownloadingCompleted && file.local.path.isNotBlank())
             return file.local.path
-        // Wait for the file to finish downloading via file update events
         val update = tdlib.fileUpdates
             .first { it.file.id == fileId && it.file.local.isDownloadingCompleted }
         update.file.local.path.takeIf { it.isNotBlank() }
     }.getOrNull()
 
-    // ── Web scraping (browse, no auth) ────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // WEB SCRAPING FALLBACK (no auth required)
+    // ══════════════════════════════════════════════════════════════════════════
 
+    /**
+     * Fetches and parses the public t.me/s/ preview page.
+     * Limited: only the last ~20 messages are visible and metadata is often absent.
+     * Consecutive document messages with the same base name are grouped as multi-part.
+     */
     suspend fun fetchChannelPostsWeb(
         channelUsername: String,
         beforeId: Int = 0
     ): List<TelegramGamePost> = kotlinx.coroutines.withContext(Dispatchers.IO) {
         try {
-            val url = buildString {
-                append("https://t.me/s/$channelUsername")
-                if (beforeId > 0) append("?before=$beforeId")
+            val url = "https://t.me/s/$channelUsername".let {
+                if (beforeId > 0) "$it?before=$beforeId" else it
             }
             val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; UsbDiskManager)")
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; UsbDiskManager/1.0)")
             conn.connectTimeout = 15_000
-            conn.readTimeout = 20_000
+            conn.readTimeout    = 20_000
             val html = conn.inputStream.bufferedReader().readText()
             conn.disconnect()
-            parseWebChannelHtml(html, channelUsername)
+            parseWebHtml(html, channelUsername)
         } catch (e: Exception) {
             Timber.e(e, "fetchChannelPostsWeb failed for $channelUsername")
             emptyList()
         }
     }
 
-    private fun parseWebChannelHtml(
-        html: String,
-        channelUsername: String
-    ): List<TelegramGamePost> {
-        val posts = mutableListOf<TelegramGamePost>()
+    private data class WebBubble(
+        val msgId: Int,
+        val text: String,
+        val docName: String,
+        val docSize: String,
+        val thumbUrl: String?
+    )
 
-        val msgPattern = Regex(
-            """data-post="$channelUsername/(\d+)"[\s\S]*?class="tgme_widget_message_bubble"([\s\S]*?)(?=data-post=|$)"""
-        )
-        val textPattern =
-            Regex("""class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)</div>""")
-        val docNamePattern =
-            Regex("""tgme_widget_message_document_title[^>]*>([^<]+)<""")
-        val docSizePattern =
-            Regex("""tgme_widget_message_document_extra[^>]*>([^<]+)<""")
-        val photoPattern =
-            Regex("""tgme_widget_message_photo_wrap[^"]*"[^>]*style="background-image:url\('([^']+)'\)""")
+    private fun parseWebHtml(html: String, channelUsername: String): List<TelegramGamePost> {
+        val bubbles = extractWebBubbles(html, channelUsername)
+        val posts   = mutableListOf<TelegramGamePost>()
+        val pending = mutableListOf<WebBubble>()
 
-        for (match in msgPattern.findAll(html)) {
-            val msgId = match.groupValues[1].toIntOrNull() ?: continue
-            val body = match.groupValues[2]
+        fun flush() {
+            if (pending.isEmpty()) return
+            val files = pending.filter { it.docName.isNotBlank() }
+            if (files.isEmpty()) { pending.clear(); return }
 
-            val docName = docNamePattern.find(body)?.groupValues?.get(1)?.trim() ?: ""
+            val metaText = pending.firstOrNull { hasGameMetadata(it.text) }?.text ?: ""
+            val descText = pending.firstOrNull {
+                isDescriptionText(it.text) && !hasGameMetadata(it.text)
+            }?.text ?: ""
 
-            // RÈGLE 1 : doit avoir un fichier attaché avec une extension de jeu reconnue
-            if (docName.isBlank()) continue
-            if (GAME_EXTENSIONS.none { docName.endsWith(it, ignoreCase = true) }) continue
-
-            val rawText = textPattern.find(body)?.groupValues?.get(1)
-                ?.replace(Regex("<[^>]+>"), " ")
-                ?.replace("&amp;", "&")?.replace("&lt;", "<")?.replace("&gt;", ">")
-                ?.replace("&nbsp;", " ")?.trim() ?: ""
-            val docSize = docSizePattern.find(body)?.groupValues?.get(1)?.trim() ?: ""
-
-            // RÈGLE 2 : exclure le spam évident (promos, pubs, vente, etc.)
-            if (isSpam(rawText)) continue
-
-            val title = extractTitle(rawText, docName)
-            val region = extractRegion(rawText + " " + docName)
-            val gameId = extractGameId(rawText + " " + docName)
-            val sizeBytes = parseSizeText(docSize)
-            val mime = when {
-                docName.endsWith(".iso", true) -> "application/x-iso9660-image"
-                docName.endsWith(".bin", true) -> "application/octet-stream"
-                docName.endsWith(".7z", true) -> "application/x-7z-compressed"
-                docName.endsWith(".zip", true) -> "application/zip"
-                else -> "application/octet-stream"
+            val parts = files.mapIndexed { idx, b ->
+                val ext = fileExtension(b.docName)
+                TelegramFilePart(
+                    partNumber     = detectPartNumber(b.docName, idx + 1),
+                    tdlibMessageId = files.first().msgId.toLong() shl 20,
+                    fileName       = b.docName,
+                    fileExtension  = ext,
+                    fileSizeBytes  = parseSizeText(b.docSize),
+                    mimeType       = mimeForExtension(ext)
+                )
             }
-            val thumbUrl = photoPattern.find(body)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
 
+            val combined = "$metaText ${files.first().docName}"
             posts.add(
                 TelegramGamePost(
-                    messageId = msgId,
                     channelUsername = channelUsername,
-                    title = title,
-                    description = rawText.take(300),
-                    region = region,
-                    gameId = gameId,
-                    fileName = docName,
-                    fileSizeBytes = sizeBytes,
-                    mimeType = mime,
-                    thumbnailUrl = thumbUrl,
-                    date = 0
+                    anchorMessageId = files.first().msgId.toLong() shl 20,
+                    title           = if (metaText.isNotBlank()) parseTitle(metaText)
+                                      else fileNameToTitle(files.first().docName),
+                    genre           = parseField(metaText, "Genre"),
+                    series          = parseField(metaText, "Series"),
+                    region          = parseRegion(combined),
+                    publisher       = parseField(metaText, "Publisher"),
+                    releaseDate     = parseField(metaText, listOf("Released", "Release Date")),
+                    modes           = parseField(metaText, listOf("Mode(s)", "Modes")),
+                    description     = descText
+                        .replaceFirst(Regex("^Description\\s*:?\\s*", RegexOption.IGNORE_CASE), "")
+                        .trim(),
+                    gameId          = parseGameSerial(combined),
+                    coverPhotoUrl   = files.first().thumbUrl,
+                    fileParts       = parts
                 )
             )
+            pending.clear()
         }
+
+        for (bubble in bubbles) {
+            val firstFile = pending.firstOrNull { it.docName.isNotBlank() }
+
+            val continues = when {
+                bubble.docName.isBlank() && firstFile == null             -> true
+                bubble.docName.isBlank() && !hasGameMetadata(bubble.text) -> true
+                bubble.docName.isNotBlank() && firstFile != null          ->
+                    shareBaseName(bubble.docName, firstFile.docName)
+                else -> true
+            }
+
+            if (!continues) flush()
+            // New game anchor while files are already pending → flush first
+            if (bubble.docName.isBlank() && hasGameMetadata(bubble.text) &&
+                pending.any { it.docName.isNotBlank() }) flush()
+
+            pending.add(bubble)
+        }
+        flush()
+
         return posts
+    }
+
+    private fun extractWebBubbles(html: String, channelUsername: String): List<WebBubble> {
+        val result = mutableListOf<WebBubble>()
+        val msgPat  = Regex(
+            """data-post="$channelUsername/(\d+)"[\s\S]*?class="tgme_widget_message_bubble"([\s\S]*?)(?=data-post=|${'$'})"""
+        )
+        val textPat  = Regex("""class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)</div>""")
+        val docName  = Regex("""tgme_widget_message_document_title[^>]*>([^<]+)<""")
+        val docSize  = Regex("""tgme_widget_message_document_extra[^>]*>([^<]+)<""")
+        val thumbPat = Regex("""tgme_widget_message_photo_wrap[^"]*"[^>]*style="background-image:url\('([^']+)'\)""")
+
+        for (m in msgPat.findAll(html)) {
+            val id   = m.groupValues[1].toIntOrNull() ?: continue
+            val body = m.groupValues[2]
+
+            val rawText = textPat.find(body)?.groupValues?.get(1)
+                ?.replace(Regex("<[^>]+>"), " ")
+                ?.replace("&amp;", "&").replace("&lt;", "<")
+                .replace("&gt;", ">").replace("&nbsp;", " ")
+                ?.trim() ?: ""
+
+            if (rawText.isNotBlank() && isNoise(rawText)) continue
+
+            val name  = docName.find(body)?.groupValues?.get(1)?.trim() ?: ""
+            val size  = docSize.find(body)?.groupValues?.get(1)?.trim() ?: ""
+            val thumb = thumbPat.find(body)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+
+            if (name.isNotBlank() && fileExtension(name) !in TelegramGamePost.GAME_EXTENSIONS) continue
+
+            result.add(WebBubble(id, rawText, name, size, thumb))
+        }
+        return result
     }
 
     // ── Deep link ─────────────────────────────────────────────────────────────
@@ -386,69 +587,245 @@ class TelegramChannelService @Inject constructor(
     fun getTelegramDeepLink(channelUsername: String, messageId: Int) =
         "https://t.me/$channelUsername/$messageId"
 
-    // ── Content helpers ───────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // DETECTION & PARSING HELPERS
+    // ══════════════════════════════════════════════════════════════════════════
 
-    private fun extractTitle(caption: String, fileName: String): String {
-        val fromCaption = caption
-            .lineSequence()
-            .firstOrNull { it.isNotBlank() }
-            ?.replace(Regex("<[^>]+>"), "")
-            ?.take(80)
-            ?.trim()
-        if (!fromCaption.isNullOrBlank()) return fromCaption
-        return fileName
-            .removeSuffix(".iso").removeSuffix(".bin")
-            .removeSuffix(".7z").removeSuffix(".zip")
-            .replace("_", " ").replace("-", " ")
-            .trim().take(80)
+    /**
+     * True if text has structured PS2 game metadata.
+     * Requires "Console" + "PS2" AND at least one of Genre/Region/Publisher/Released.
+     */
+    private fun hasGameMetadata(text: String): Boolean {
+        if (text.isBlank()) return false
+        return text.contains("Console", ignoreCase = true) &&
+               text.contains("PS2",     ignoreCase = true) &&
+               (text.contains("Genre",     ignoreCase = true) ||
+                text.contains("Region",    ignoreCase = true) ||
+                text.contains("Publisher", ignoreCase = true) ||
+                text.contains("Released",  ignoreCase = true))
     }
 
-    private fun extractRegion(text: String): String {
+    /**
+     * True if text is a long-form game description block.
+     */
+    private fun isDescriptionText(text: String): Boolean {
+        if (text.isBlank()) return false
+        if (text.startsWith("Description", ignoreCase = true)) return true
+        return text.length > 80 && !hasGameMetadata(text) && !isNoise(text)
+    }
+
+    private fun isServiceMessage(msg: TdApi.Message): Boolean =
+        when (msg.content) {
+            is TdApi.MessageChatPinMessage,
+            is TdApi.MessagePinMessage,
+            is TdApi.MessageChatJoinByLink,
+            is TdApi.MessageChatAddMembers,
+            is TdApi.MessageChatDeleteMember -> true
+            else -> false
+        }
+
+    private fun isNoise(text: String): Boolean {
+        if (text.isBlank()) return false
+        val t = text.lowercase()
+        if (NOISE_PREFIXES.any { t.startsWith(it) }) return true
+        if (SPAM_KEYWORDS.any { t.contains(it) })    return true
+        if (EXTERNAL_DOMAINS.any { t.contains(it) }) return true
+        return false
+    }
+
+    // ── Metadata field parsers ────────────────────────────────────────────────
+
+    /** First non-blank non-metadata line is the game title. */
+    private fun parseTitle(text: String): String {
+        val metaRe = Regex(
+            "^\\s*(Console|Genre|Region|Publisher|Released|Release Date|Mode|Series)\\s*:",
+            RegexOption.IGNORE_CASE
+        )
+        for (line in text.lines()) {
+            val clean = line.replace(Regex("<[^>]+>"), "").trim()
+            if (clean.isBlank()) continue
+            if (metaRe.containsMatchIn(clean)) break
+            return clean.take(100)
+        }
+        return ""
+    }
+
+    private fun parseField(text: String, key: String) = parseField(text, listOf(key))
+
+    private fun parseField(text: String, keys: List<String>): String {
+        for (line in text.lines()) {
+            for (key in keys) {
+                val m = Regex(
+                    "^\\s*${Regex.escape(key)}\\s*:\\s*(.+)$",
+                    RegexOption.IGNORE_CASE
+                ).find(line)
+                if (m != null) return m.groupValues[1].trim().take(200)
+            }
+        }
+        return ""
+    }
+
+    private fun parseRegion(text: String): String {
+        val field = parseField(text, "Region")
+        if (field.isNotBlank()) return when {
+            field.contains("USA",          ignoreCase = true) ||
+            field.contains("NTSC-U",       ignoreCase = true) ||
+            field.contains("North America", ignoreCase = true) -> "NTSC-U"
+            field.contains("Europe", ignoreCase = true) ||
+            field.contains("PAL",    ignoreCase = true)        -> "PAL"
+            field.contains("Japan",  ignoreCase = true) ||
+            field.contains("NTSC-J", ignoreCase = true) ||
+            field.contains("Asia",   ignoreCase = true)        -> "NTSC-J"
+            else -> field.take(20)
+        }
         val t = text.lowercase()
         return when {
-            t.contains("(usa)") || t.contains("ntsc-u") || t.contains("slus") -> "NTSC-U"
-            t.contains("(europe)") || t.contains("pal") || t.contains("sles") -> "PAL"
-            t.contains("(japan)") || t.contains("ntsc-j") ||
-                t.contains("slps") || t.contains("slpm") -> "NTSC-J"
+            "(usa)"    in t || "ntsc-u" in t || "slus" in t || "scus" in t -> "NTSC-U"
+            "(europe)" in t || "(pal)"  in t || "sles" in t || "sces" in t -> "PAL"
+            "(japan)"  in t || "ntsc-j" in t || "slps" in t || "slpm" in t -> "NTSC-J"
             else -> ""
         }
     }
 
-    private fun extractGameId(text: String): String =
-        PS2_ID_REGEX.find(text)?.value?.replace("_", "-") ?: ""
+    private fun parseGameSerial(text: String): String =
+        PS2_SERIAL_RE.find(text)?.value?.replace("_", "-")?.uppercase() ?: ""
 
-    private fun parseSizeText(sizeStr: String): Long {
-        val cleaned = sizeStr.trim()
-        val num = Regex("([\\d.]+)").find(cleaned)?.groupValues?.get(1)
-            ?.toDoubleOrNull() ?: return 0L
+    // ── TDLib message helpers ─────────────────────────────────────────────────
+
+    private fun extractMessageText(msg: TdApi.Message): String =
+        when (val c = msg.content) {
+            is TdApi.MessageText     -> c.text?.text ?: ""
+            is TdApi.MessagePhoto    -> c.caption?.text ?: ""
+            is TdApi.MessageDocument -> c.caption?.text ?: ""
+            is TdApi.MessageVideo    -> c.caption?.text ?: ""
+            else -> ""
+        }
+
+    /** Returns the TDLib file ID of the photo sized closest to 320px wide. */
+    private fun extractPhotoThumbnailId(msg: TdApi.Message): Int {
+        val photo = when (val c = msg.content) {
+            is TdApi.MessagePhoto    -> c.photo
+            is TdApi.MessageDocument -> return c.document?.thumbnail?.file?.id ?: 0
+            else -> return 0
+        } ?: return 0
+        return photo.sizes
+            .filter { it.width > 0 }
+            .minByOrNull { kotlin.math.abs(it.width - 320) }
+            ?.photo?.id ?: 0
+    }
+
+    // ── File helpers ──────────────────────────────────────────────────────────
+
+    private fun fileExtension(fileName: String): String {
+        val lower = fileName.lowercase()
         return when {
-            cleaned.contains("GB", ignoreCase = true) -> (num * 1_000_000_000).toLong()
-            cleaned.contains("MB", ignoreCase = true) -> (num * 1_000_000).toLong()
-            cleaned.contains("KB", ignoreCase = true) -> (num * 1_000).toLong()
+            lower.endsWith(".rar") -> ".rar"
+            lower.endsWith(".7z")  -> ".7z"
+            lower.endsWith(".zip") -> ".zip"
+            lower.endsWith(".iso") -> ".iso"
+            lower.endsWith(".bin") -> ".bin"
+            lower.endsWith(".chd") -> ".chd"
+            else -> lower.substringAfterLast('.', "").let { if (it.isNotBlank()) ".$it" else "" }
+        }
+    }
+
+    private fun mimeForExtension(ext: String): String = when (ext) {
+        ".iso" -> "application/x-iso9660-image"
+        ".7z"  -> "application/x-7z-compressed"
+        ".zip" -> "application/zip"
+        ".rar" -> "application/x-rar-compressed"
+        else   -> "application/octet-stream"
+    }
+
+    /**
+     * Detects sequential part number from file name.
+     * "Game.part2.rar" → 2,  "Game (3).zip" → 3,  "Game.rar" → fallback.
+     */
+    private fun detectPartNumber(fileName: String, fallback: Int): Int {
+        PART_NUMBER_RES.forEach { re ->
+            val v = re.find(fileName)?.groupValues?.get(1)?.toIntOrNull()
+            if (v != null) return v
+        }
+        return fallback
+    }
+
+    /** True if two file names belong to the same multi-part archive. */
+    private fun shareBaseName(a: String, b: String): Boolean {
+        fun base(s: String) = s.lowercase()
+            .replace(Regex("\\.part\\d+\\.\\w+$"), "")
+            .replace(Regex("\\s*\\(\\d+\\)\\s*\\.\\w+$"), "")
+            .replace(Regex("\\.\\w+$"), "")
+            .trim()
+        val ba = base(a); val bb = base(b)
+        return ba.isNotBlank() && ba == bb
+    }
+
+    private fun fileNameToTitle(fn: String) = fn
+        .replace(Regex("\\.part\\d+\\.\\w+$"), "")
+        .replace(Regex("\\.\\w+$"), "")
+        .replace("_", " ").replace("-", " ")
+        .trim().take(100)
+
+    private fun parseSizeText(s: String): Long {
+        val n = Regex("([\\d.]+)").find(s.trim())?.groupValues?.get(1)?.toDoubleOrNull()
+            ?: return 0L
+        return when {
+            "GB" in s.uppercase() -> (n * 1_000_000_000).toLong()
+            "MB" in s.uppercase() -> (n * 1_000_000).toLong()
+            "KB" in s.uppercase() -> (n * 1_000).toLong()
             else -> 0L
         }
     }
 
-    companion object {
-        private val GAME_EXTENSIONS = listOf(".iso", ".bin", ".7z", ".zip", ".rar", ".chd")
+    // ══════════════════════════════════════════════════════════════════════════
+    // CONSTANTS
+    // ══════════════════════════════════════════════════════════════════════════
 
-        private val SPAM_KEYWORDS = listOf(
-            "promo code", "gift card", "dm me", "₹", "rs ", "discount",
-            "selling", "only one member", "interested people", "gift",
-            "coupon", "offer", "serum", "toner", "product", "shipping",
-            "whatsapp", "call me", "click here", "buy now", "free",
-            "earn money", "investment", "crypto", "bitcoin"
+    companion object {
+        /** Files smaller than 50 MB are not game files. */
+        private const val MIN_GAME_FILE_BYTES = 50L * 1024L * 1024L
+
+        private val PART_NUMBER_RES = listOf(
+            Regex("""\bpart\s*(\d+)\b""",  RegexOption.IGNORE_CASE),
+            Regex("""\((\d+)\)\s*\.\w+$"""),
+            Regex("""[-_\s](\d+)\s*\.\w+$""")
         )
 
-        private val PS2_ID_REGEX = Regex(
+        private val PS2_SERIAL_RE = Regex(
             "(SLES|SCES|SLUS|SCUS|SLED|SCED|SLPM|SLPS|SCPS|SCAJ)[_-]?\\d{3}\\.\\d{2}",
             RegexOption.IGNORE_CASE
         )
-    }
 
-    private fun isSpam(text: String): Boolean {
-        if (text.isBlank()) return false
-        val t = text.lowercase()
-        return SPAM_KEYWORDS.any { t.contains(it) }
+        /** Text starting with these (lowercased) is unconditional noise. */
+        private val NOISE_PREFIXES = listOf(
+            "system requirements to run the game",
+            "you can request your ps2 games",
+            "ps2 game request",
+            "ps2 games list has been updated",
+            "which game", "which games",
+            "join my channel", "join from the below link",
+            "happy gaming", "merry christmas",
+            "how to install", "from tomorrow",
+            "hi guys", "hi folks",
+            "it been a while",
+            "proof", "note 1.",
+            "music is going to start", "music started"
+        )
+
+        private val SPAM_KEYWORDS = listOf(
+            "promo code", "gift card", "dm me", "₹", "rs ", "discount",
+            "selling the promo", "only one member", "interested people dm",
+            "serum", "toner", "shipping charge",
+            "whatsapp.com", "wa.me",
+            "earn money", "cryptocurrency", "bitcoin", "honeygain",
+            "jupiterpe", "minepi.com", "loan", "fincorp", "banksathi",
+            "promiby", "texovera", "pi is a new digital currency"
+        )
+
+        private val EXTERNAL_DOMAINS = listOf(
+            "store.epicgames.com", "store.steampowered.com",
+            "comments.bot/thread", "t.me/ps2gameslist",
+            "t.me/gamemodspsworld", "cfwaifu.com"
+        )
     }
 }
