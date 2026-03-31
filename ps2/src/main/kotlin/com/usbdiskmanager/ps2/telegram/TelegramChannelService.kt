@@ -238,9 +238,6 @@ class TelegramChannelService @Inject constructor(
         )
         val textPattern =
             Regex("""class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)</div>""")
-        val photoPattern = Regex(
-            """tgme_widget_message_photo_wrap[^"]*"[^>]*style="background-image:url\('([^']+)'\)"""
-        )
         val docNamePattern =
             Regex("""tgme_widget_message_document_title[^>]*>([^<]+)<""")
         val docSizePattern =
@@ -250,20 +247,24 @@ class TelegramChannelService @Inject constructor(
             val msgId = match.groupValues[1].toIntOrNull() ?: continue
             val body = match.groupValues[2]
 
+            val docName = docNamePattern.find(body)?.groupValues?.get(1)?.trim() ?: ""
+
+            // RÈGLE 1 : doit avoir un fichier attaché avec une extension de jeu reconnue
+            if (docName.isBlank()) continue
+            if (GAME_EXTENSIONS.none { docName.endsWith(it, ignoreCase = true) }) continue
+
             val rawText = textPattern.find(body)?.groupValues?.get(1)
                 ?.replace(Regex("<[^>]+>"), " ")
                 ?.replace("&amp;", "&")?.replace("&lt;", "<")?.replace("&gt;", ">")
                 ?.replace("&nbsp;", " ")?.trim() ?: ""
-            val photoUrl = photoPattern.find(body)?.groupValues?.get(1) ?: ""
-            val docName = docNamePattern.find(body)?.groupValues?.get(1)?.trim() ?: ""
             val docSize = docSizePattern.find(body)?.groupValues?.get(1)?.trim() ?: ""
 
-            if (docName.isBlank() && photoUrl.isBlank() && rawText.isBlank()) continue
-            if (!isPs2Content(rawText, docName) && docName.isBlank()) continue
+            // RÈGLE 2 : exclure le spam évident (promos, pubs, vente, etc.)
+            if (isSpam(rawText)) continue
 
             val title = extractTitle(rawText, docName)
             val region = extractRegion(rawText + " " + docName)
-            val gameId = extractGameId(rawText)
+            val gameId = extractGameId(rawText + " " + docName)
             val sizeBytes = parseSizeText(docSize)
             val mime = when {
                 docName.endsWith(".iso", true) -> "application/x-iso9660-image"
@@ -281,7 +282,7 @@ class TelegramChannelService @Inject constructor(
                     description = rawText.take(300),
                     region = region,
                     gameId = gameId,
-                    fileName = docName.ifBlank { "message_$msgId.iso" },
+                    fileName = docName,
                     fileSizeBytes = sizeBytes,
                     mimeType = mime,
                     date = 0
@@ -297,11 +298,6 @@ class TelegramChannelService @Inject constructor(
         "https://t.me/$channelUsername/$messageId"
 
     // ── Content helpers ───────────────────────────────────────────────────────
-
-    private fun isPs2Content(text: String, fileName: String): Boolean {
-        val combined = (text + " " + fileName).lowercase()
-        return PS2_KEYWORDS.any { combined.contains(it) }
-    }
 
     private fun extractTitle(caption: String, fileName: String): String {
         val fromCaption = caption
@@ -345,12 +341,25 @@ class TelegramChannelService @Inject constructor(
     }
 
     companion object {
-        private val PS2_KEYWORDS = listOf(
-            "ps2", "playstation 2", "iso", "slus", "sles", "slpm", "slps", "pcsx2", ".iso", "rom"
+        private val GAME_EXTENSIONS = listOf(".iso", ".bin", ".7z", ".zip", ".rar", ".chd")
+
+        private val SPAM_KEYWORDS = listOf(
+            "promo code", "gift card", "dm me", "₹", "rs ", "discount",
+            "selling", "only one member", "interested people", "gift",
+            "coupon", "offer", "serum", "toner", "product", "shipping",
+            "whatsapp", "call me", "click here", "buy now", "free",
+            "earn money", "investment", "crypto", "bitcoin"
         )
+
         private val PS2_ID_REGEX = Regex(
             "(SLES|SCES|SLUS|SCUS|SLED|SCED|SLPM|SLPS|SCPS|SCAJ)[_-]?\\d{3}\\.\\d{2}",
             RegexOption.IGNORE_CASE
         )
+    }
+
+    private fun isSpam(text: String): Boolean {
+        if (text.isBlank()) return false
+        val t = text.lowercase()
+        return SPAM_KEYWORDS.any { t.contains(it) }
     }
 }
