@@ -12,6 +12,7 @@ import com.usbdiskmanager.ps2.data.scanner.IsoScanner
 import com.usbdiskmanager.ps2.data.transfer.UsbGameTransferManager
 import com.usbdiskmanager.ps2.domain.model.ConversionJob
 import com.usbdiskmanager.ps2.domain.model.ConversionProgress
+import com.usbdiskmanager.ps2.domain.model.ConversionStatus
 import com.usbdiskmanager.ps2.domain.model.DownloadStatus
 import com.usbdiskmanager.ps2.domain.model.IsoSearchResult
 import com.usbdiskmanager.ps2.domain.model.OutputDestination
@@ -46,11 +47,14 @@ data class Ps2UiState(
     val jobs: List<ConversionJob> = emptyList(),
     val searchQuery: String = "",
     val sortMode: SortMode = SortMode.TITLE,
+    val gameLayout: GameLayout = GameLayout.LIST,
+    val gameFilter: GameFilter = GameFilter.ALL,
     val isScanning: Boolean = false,
     val scanPaths: List<String> = emptyList(),
     val activeProgress: Map<String, ConversionProgress> = emptyMap(),
     val selectedGame: Ps2Game? = null,
     val showConvertDialog: Boolean = false,
+    val gameToDelete: Ps2Game? = null,
     val errorMessage: String? = null,
     val selectedTab: Ps2Tab = Ps2Tab.GAMES,
     val isMultiSelectMode: Boolean = false,
@@ -83,10 +87,19 @@ data class Ps2UiState(
 ) {
     val filteredGames: List<Ps2Game>
         get() {
-            val filtered = if (searchQuery.isBlank()) games
+            var filtered = if (searchQuery.isBlank()) games
             else games.filter {
                 it.title.contains(searchQuery, ignoreCase = true) ||
                     it.gameId.contains(searchQuery, ignoreCase = true)
+            }
+            filtered = when (gameFilter) {
+                GameFilter.ALL -> filtered
+                GameFilter.NOT_CONVERTED -> filtered.filter { it.conversionStatus == ConversionStatus.NOT_CONVERTED }
+                GameFilter.COMPLETED -> filtered.filter { it.conversionStatus == ConversionStatus.COMPLETED }
+                GameFilter.IN_PROGRESS -> filtered.filter {
+                    it.conversionStatus == ConversionStatus.IN_PROGRESS ||
+                    it.conversionStatus == ConversionStatus.PAUSED
+                }
             }
             return when (sortMode) {
                 SortMode.TITLE  -> filtered.sortedBy { it.title }
@@ -101,7 +114,11 @@ data class Ps2UiState(
 
 enum class SortMode { TITLE, SIZE, STATUS }
 
-enum class Ps2Tab { GAMES, MERGE_CFG, UL_MANAGER, DOWNLOAD, TRANSFER, TELEGRAM }
+enum class GameLayout { LIST, GRID }
+
+enum class GameFilter { ALL, NOT_CONVERTED, COMPLETED, IN_PROGRESS }
+
+enum class Ps2Tab { GAMES, MERGE_CFG, UL_MANAGER, TRANSFER, TELEGRAM }
 
 data class TelegramUiState(
     val isConfigured: Boolean = false,
@@ -442,6 +459,32 @@ class Ps2ViewModel @Inject constructor(
 
     fun setIsoSearchQuery(q: String) = _uiState.update { it.copy(isoSearchQuery = q) }
     fun clearIsoSearch() = _uiState.update { it.copy(isoSearchResults = emptyList(), isoSearchQuery = "", isoSearchError = null) }
+
+    // ── Game Layout & Filter ──────────────────────────────────────────────────
+
+    fun setGameLayout(layout: GameLayout) = _uiState.update { it.copy(gameLayout = layout) }
+    fun setGameFilter(filter: GameFilter) = _uiState.update { it.copy(gameFilter = filter) }
+
+    // ── Delete ISO Game ───────────────────────────────────────────────────────
+
+    fun requestDeleteGame(game: Ps2Game) {
+        _uiState.update { it.copy(gameToDelete = game) }
+    }
+
+    fun dismissDeleteGame() {
+        _uiState.update { it.copy(gameToDelete = null) }
+    }
+
+    fun confirmDeleteGame() {
+        val game = _uiState.value.gameToDelete ?: return
+        _uiState.update { it.copy(gameToDelete = null) }
+        viewModelScope.launch {
+            val ok = repository.deleteGame(game)
+            if (!ok) {
+                _uiState.update { it.copy(errorMessage = "Impossible de supprimer ${game.title}") }
+            }
+        }
+    }
 
     // ── UL Manager ───────────────────────────────────────────────────────────
 

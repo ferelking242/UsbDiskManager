@@ -15,6 +15,10 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -42,6 +46,7 @@ import com.usbdiskmanager.ps2.ui.components.BatchConversionDialog
 import com.usbdiskmanager.ps2.ui.components.ConversionDialog
 import com.usbdiskmanager.ps2.ui.components.Fat32WarningDialog
 import com.usbdiskmanager.ps2.ui.components.GameCard
+import com.usbdiskmanager.ps2.ui.components.GameGridCard
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,14 +81,12 @@ fun Ps2StudioScreen(
         viewModel.scanPhone()
     }
 
-    // Re-check storage permission when coming back from settings
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             hasStorageAccess = Environment.isExternalStorageManager()
         }
     }
 
-    // Auto-load USB mounts + transfer games when switching to Transfer tab
     LaunchedEffect(uiState.selectedTab) {
         if (uiState.selectedTab == Ps2Tab.TRANSFER) {
             viewModel.refreshUsbMounts()
@@ -94,7 +97,6 @@ fun Ps2StudioScreen(
     var showBatchDialog by remember { mutableStateOf(false) }
     var showDownloadManager by remember { mutableStateOf(false) }
 
-    // Download manager bottom sheet
     if (showDownloadManager) {
         DownloadManagerSheet(
             downloads = uiState.telegramState.downloads,
@@ -126,7 +128,6 @@ fun Ps2StudioScreen(
                         )
                     },
                     actions = {
-                        // ── Download Manager icon (always visible) ──
                         val activeDownloads = uiState.telegramState.downloads.values.count {
                             it.status == TgDownloadStatus.DOWNLOADING || it.status == TgDownloadStatus.QUEUED
                         }
@@ -147,8 +148,22 @@ fun Ps2StudioScreen(
                             }
                         }
 
-                        // Multi-select toggle
                         if (uiState.selectedTab == Ps2Tab.GAMES) {
+                            // Layout toggle
+                            IconButton(onClick = {
+                                viewModel.setGameLayout(
+                                    if (uiState.gameLayout == GameLayout.LIST) GameLayout.GRID else GameLayout.LIST
+                                )
+                            }) {
+                                Icon(
+                                    if (uiState.gameLayout == GameLayout.GRID) Icons.Default.ViewList
+                                    else Icons.Default.GridView,
+                                    contentDescription = "Changer la disposition",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+
+                            // Multi-select toggle
                             IconButton(onClick = viewModel::toggleMultiSelectMode) {
                                 Icon(
                                     if (uiState.isMultiSelectMode) Icons.Default.Close
@@ -165,10 +180,8 @@ fun Ps2StudioScreen(
                                         tint = MaterialTheme.colorScheme.primary)
                                 }
                             }
-                        }
 
-                        var showSortMenu by remember { mutableStateOf(false) }
-                        if (uiState.selectedTab == Ps2Tab.GAMES) {
+                            var showSortMenu by remember { mutableStateOf(false) }
                             IconButton(onClick = { showSortMenu = true }) {
                                 Icon(Icons.Default.Sort, contentDescription = "Trier")
                             }
@@ -208,7 +221,6 @@ fun Ps2StudioScreen(
                     scrollBehavior = scrollBehavior
                 )
 
-                // ── Telegram-style horizontal sub-tab bar ──
                 ScrollableTabRow(
                     selectedTabIndex = uiState.selectedTab.ordinal,
                     edgePadding = 16.dp,
@@ -233,9 +245,8 @@ fun Ps2StudioScreen(
                                 Text(
                                     text = when (tab) {
                                         Ps2Tab.GAMES      -> "Jeux"
-                                        Ps2Tab.MERGE_CFG  -> "Fusionner CFG"
+                                        Ps2Tab.MERGE_CFG  -> "CFG"
                                         Ps2Tab.UL_MANAGER -> "UL Manager"
-                                        Ps2Tab.DOWNLOAD   -> "Archive.org"
                                         Ps2Tab.TRANSFER   -> "Transfert"
                                         Ps2Tab.TELEGRAM   -> "Telegram"
                                     },
@@ -249,7 +260,6 @@ fun Ps2StudioScreen(
                                         Ps2Tab.GAMES      -> Icons.Default.VideogameAsset
                                         Ps2Tab.MERGE_CFG  -> Icons.Default.MergeType
                                         Ps2Tab.UL_MANAGER -> Icons.Default.ManageSearch
-                                        Ps2Tab.DOWNLOAD   -> Icons.Default.Download
                                         Ps2Tab.TRANSFER   -> Icons.Default.SwapHoriz
                                         Ps2Tab.TELEGRAM   -> Icons.Default.Send
                                     },
@@ -286,7 +296,6 @@ fun Ps2StudioScreen(
                     )
                     Ps2Tab.MERGE_CFG  -> UlCfgMergerScreen()
                     Ps2Tab.UL_MANAGER -> UlManagerScreen(viewModel = viewModel)
-                    Ps2Tab.DOWNLOAD   -> Ps2DownloadScreen(viewModel = viewModel)
                     Ps2Tab.TRANSFER   -> UsbTransferScreen(viewModel = viewModel)
                     Ps2Tab.TELEGRAM   -> TelegramDownloadScreen(viewModel = viewModel)
                 }
@@ -296,7 +305,6 @@ fun Ps2StudioScreen(
 
     // ── Dialogs ──
 
-    // Single game conversion dialog
     if (uiState.showConvertDialog && uiState.selectedGame != null) {
         ConversionDialog(
             game = uiState.selectedGame!!,
@@ -307,7 +315,6 @@ fun Ps2StudioScreen(
         )
     }
 
-    // FAT32 warning
     if (uiState.showFat32Warning) {
         Fat32WarningDialog(
             mount = uiState.fat32WarningMount,
@@ -316,7 +323,6 @@ fun Ps2StudioScreen(
         )
     }
 
-    // Batch conversion dialog
     if (showBatchDialog) {
         BatchConversionDialog(
             count = uiState.multiSelectedIds.size,
@@ -326,6 +332,32 @@ fun Ps2StudioScreen(
             onConvert = { dest ->
                 showBatchDialog = false
                 viewModel.requestConversionWithDest(dest)
+            }
+        )
+    }
+
+    // Delete confirmation dialog
+    uiState.gameToDelete?.let { game ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissDeleteGame,
+            icon = { Icon(Icons.Default.DeleteForever, null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("Supprimer le jeu ?") },
+            text = {
+                Text(
+                    "Le fichier ISO \"${game.title}\" sera définitivement supprimé du stockage.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = viewModel::confirmDeleteGame,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text("Supprimer") }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissDeleteGame) { Text("Annuler") }
             }
         )
     }
@@ -402,12 +434,69 @@ private fun GameListTab(
             shape = RoundedCornerShape(12.dp)
         )
 
+        // Filter chips
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(bottom = 8.dp)
+        ) {
+            val filters = listOf(
+                GameFilter.ALL to "Tous",
+                GameFilter.NOT_CONVERTED to "Non converti",
+                GameFilter.IN_PROGRESS to "En cours",
+                GameFilter.COMPLETED to "Terminé"
+            )
+            items(filters) { (filter, label) ->
+                FilterChip(
+                    selected = uiState.gameFilter == filter,
+                    onClick = { viewModel.setGameFilter(filter) },
+                    label = { Text(label, style = MaterialTheme.typography.labelMedium) },
+                    leadingIcon = if (uiState.gameFilter == filter) ({
+                        Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp))
+                    }) else null
+                )
+            }
+        }
+
         if (uiState.games.isEmpty() && !uiState.isScanning) {
             EmptyState(
                 modifier = Modifier.fillMaxSize().weight(1f),
                 onPickFolder = onPickFolder
             )
+        } else if (uiState.gameLayout == GameLayout.GRID) {
+            // 2×2 grid layout
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                contentPadding = PaddingValues(
+                    start = 12.dp, end = 12.dp, top = 4.dp, bottom = 96.dp
+                ),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                items(items = uiState.filteredGames, key = { it.id }) { game ->
+                    val progress = uiState.activeProgress[game.isoPath]
+                    val isSelected = game.id in uiState.multiSelectedIds
+                    GameGridCard(
+                        game = game,
+                        progress = progress,
+                        isSelected = isSelected,
+                        isMultiSelectMode = uiState.isMultiSelectMode,
+                        onSelectClick = {
+                            if (uiState.isMultiSelectMode) viewModel.toggleGameSelection(game)
+                            else { viewModel.toggleMultiSelectMode(); viewModel.toggleGameSelection(game) }
+                        },
+                        onConvertClick = {
+                            if (!uiState.isMultiSelectMode) viewModel.selectGame(game)
+                            else viewModel.toggleGameSelection(game)
+                        },
+                        onDeleteClick = { viewModel.requestDeleteGame(game) },
+                        onFetchCoverClick = { viewModel.fetchCover(game) }
+                    )
+                }
+            }
         } else {
+            // List layout
             LazyColumn(
                 state = scrollState,
                 contentPadding = PaddingValues(
@@ -443,6 +532,15 @@ private fun GameListTab(
                                 if (!uiState.isMultiSelectMode) viewModel.selectGame(game)
                                 else viewModel.toggleGameSelection(game)
                             },
+                            onSelectClick = {
+                                if (!uiState.isMultiSelectMode) {
+                                    viewModel.toggleMultiSelectMode()
+                                    viewModel.toggleGameSelection(game)
+                                } else {
+                                    viewModel.toggleGameSelection(game)
+                                }
+                            },
+                            onDeleteClick = { viewModel.requestDeleteGame(game) },
                             onPauseClick = { viewModel.pauseConversion(game.isoPath) },
                             onResumeClick = { viewModel.resumeConversion(game.isoPath) },
                             onCancelClick = { viewModel.cancelConversion(game.isoPath) },

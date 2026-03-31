@@ -47,4 +47,7 @@ interface Ps2Repository {
 
     /** Ensure the default PS2Manager folder structure exists. */
     suspend fun ensureDirectoryStructure(basePath: String)
+
+    /** Delete an ISO file from the filesystem and remove it from the games list. */
+    suspend fun deleteGame(game: Ps2Game): Boolean
 }

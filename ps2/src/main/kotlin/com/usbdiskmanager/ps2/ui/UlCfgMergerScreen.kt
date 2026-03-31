@@ -2,19 +2,17 @@ package com.usbdiskmanager.ps2.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -44,28 +42,29 @@ fun UlCfgMergerScreen() {
     var destEntries by remember { mutableStateOf<List<UlCfgManager.UlEntry>>(emptyList()) }
     var destPath by remember { mutableStateOf<String?>(null) }
     var resultMessage by remember { mutableStateOf<String?>(null) }
+    var isSuccess by remember { mutableStateOf(false) }
     var isProcessing by remember { mutableStateOf(false) }
     var editedNames by remember { mutableStateOf<Map<Pair<Int, Int>, String>>(emptyMap()) }
     var editingKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var editDialogText by remember { mutableStateOf("") }
 
+    // Tab index: 0..N-1 = sources, last = preview
+    var selectedTab by remember { mutableIntStateOf(0) }
+
     val defaultCfgFile = remember { File(IsoScanner.DEFAULT_UL_DIR, "ul.cfg") }
 
-    // Compute the destination file from chosen path or default
     val destFile by remember(destPath) {
         derivedStateOf {
             if (destPath != null) File(destPath!!, "ul.cfg") else defaultCfgFile
         }
     }
 
-    // Load dest entries when destFile changes
     LaunchedEffect(destFile) {
         withContext(Dispatchers.IO) {
             destEntries = if (destFile.exists()) cfgManager.readAllEntries(destFile) else emptyList()
         }
     }
 
-    // Precompute duplicate sets (stable, not mutated during composition)
     val destIds: Set<String> = remember(destEntries) {
         destEntries.map { it.gameIdClean.trim().uppercase() }.toSet()
     }
@@ -84,8 +83,13 @@ fun UlCfgMergerScreen() {
         dups
     }
 
+    // Adjust selected tab if sources list changes
+    LaunchedEffect(sources.size) {
+        if (selectedTab > sources.size) selectedTab = 0
+    }
+
     fun mergeAll() {
-        if (sources.isEmpty()) { resultMessage = "Ajoutez au moins un fichier source."; return }
+        if (sources.isEmpty()) { resultMessage = "Ajoutez au moins un fichier source."; isSuccess = false; return }
         scope.launch {
             isProcessing = true
             withContext(Dispatchers.IO) {
@@ -104,9 +108,12 @@ fun UlCfgMergerScreen() {
                         tempFile.delete()
                     }
                     destEntries = cfgManager.readAllEntries(destFile)
-                    resultMessage = "✓ Fusion terminée — $totalAdded nouveau(x) jeu(x) ajouté(s). Total: ${destEntries.size}."
+                    resultMessage = "Fusion terminée — $totalAdded nouveau(x) jeu(x). Total: ${destEntries.size}."
+                    isSuccess = true
+                    selectedTab = sources.size // go to preview tab
                 } catch (e: Exception) {
-                    resultMessage = "Erreur fusion: ${e.message}"
+                    resultMessage = "Erreur: ${e.message}"
+                    isSuccess = false
                 }
             }
             isProcessing = false
@@ -127,14 +134,17 @@ fun UlCfgMergerScreen() {
                         val entries = cfgManager.readAllEntries(temp)
                         if (entries.isEmpty()) {
                             resultMessage = "Fichier vide ou format invalide."
+                            isSuccess = false
                         } else {
                             val raw = uri.lastPathSegment ?: "source_$idx.cfg"
                             val name = raw.substringAfterLast('/').substringAfterLast(':')
                             sources = sources + SourceCfg(name, temp, entries)
+                            selectedTab = sources.size - 1
                             resultMessage = null
                         }
                     } catch (e: Exception) {
                         resultMessage = "Erreur lecture: ${e.message}"
+                        isSuccess = false
                     }
                 }
                 isProcessing = false
@@ -159,7 +169,6 @@ fun UlCfgMergerScreen() {
         }
     }
 
-    // Edit dialog
     editingKey?.let { key ->
         AlertDialog(
             onDismissRequest = { editingKey = null },
@@ -169,9 +178,19 @@ fun UlCfgMergerScreen() {
                 OutlinedTextField(
                     value = editDialogText,
                     onValueChange = { if (it.length <= 32) editDialogText = it },
-                    label = { Text("Nom du jeu (max 32)") },
+                    label = { Text("Nom (max 32 caractères)") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    trailingIcon = {
+                        Text(
+                            "${editDialogText.length}/32",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (editDialogText.length >= 30)
+                                MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                    }
                 )
             },
             confirmButton = {
@@ -186,151 +205,394 @@ fun UlCfgMergerScreen() {
         )
     }
 
-    LazyColumn(
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.fillMaxSize()
-    ) {
+    Column(modifier = Modifier.fillMaxSize()) {
 
-        // ── Info banner ──
-        item {
+        // ── Result banner ──
+        resultMessage?.let { msg ->
             Surface(
-                color = MaterialTheme.colorScheme.primaryContainer,
-                shape = RoundedCornerShape(12.dp)
+                color = if (isSuccess) MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.colorScheme.errorContainer,
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.Top
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        Icons.Default.MergeType, null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(20.dp).padding(top = 2.dp)
+                        if (isSuccess) Icons.Default.CheckCircle else Icons.Default.Error,
+                        null,
+                        tint = if (isSuccess) MaterialTheme.colorScheme.onPrimaryContainer
+                               else MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.size(18.dp)
                     )
-                    Column {
-                        Text(
-                            "Fusionner plusieurs ul.cfg",
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                        Text(
-                            "Ajoutez des fichiers source, vérifiez les doublons, choisissez la destination et fusionnez.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    }
-                }
-            }
-        }
-
-        // ── Source file actions bar ──
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Button(
-                    onClick = { filePicker.launch("*/*") },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(10.dp),
-                    enabled = !isProcessing
-                ) {
-                    if (isProcessing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text("Chargement…")
-                    } else {
-                        Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (sources.isEmpty()) "Ajouter un fichier source" else "Ajouter un autre fichier")
-                    }
-                }
-                if (sources.isNotEmpty()) {
-                    OutlinedButton(
-                        onClick = {
-                            sources = emptyList()
-                            editedNames = emptyMap()
-                            resultMessage = null
-                        },
-                        shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
-                    ) {
-                        Icon(Icons.Default.DeleteSweep, null, modifier = Modifier.size(18.dp))
-                    }
-                }
-            }
-        }
-
-        // ── Source files as a horizontal chip bar ──
-        if (sources.isNotEmpty()) {
-            item(key = "source_chips") {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        "Fichiers source (${sources.size})",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.SemiBold
+                        msg,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isSuccess) MaterialTheme.colorScheme.onPrimaryContainer
+                                else MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.weight(1f)
                     )
+                    IconButton(
+                        onClick = { resultMessage = null },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(Icons.Default.Close, null, modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
+        }
+
+        // ── Tabs: Source 1, Source 2, ..., Aperçu ──
+        val tabCount = sources.size + 1 // +1 for preview
+        val previewTabIndex = sources.size
+
+        ScrollableTabRow(
+            selectedTabIndex = selectedTab.coerceIn(0, tabCount - 1),
+            edgePadding = 12.dp,
+            divider = {},
+            indicator = { tabPositions ->
+                val idx = selectedTab.coerceIn(0, tabCount - 1)
+                if (idx < tabPositions.size) {
+                    TabRowDefaults.SecondaryIndicator(
+                        modifier = Modifier.tabIndicatorOffset(tabPositions[idx]),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
+            sources.forEachIndexed { si, source ->
+                Tab(
+                    selected = selectedTab == si,
+                    onClick = { selectedTab = si },
+                    text = {
+                        Text(
+                            "Source ${si + 1}",
+                            fontWeight = if (selectedTab == si) FontWeight.Bold else FontWeight.Normal
+                        )
+                    },
+                    icon = { Icon(Icons.Default.FileOpen, null, modifier = Modifier.size(16.dp)) }
+                )
+            }
+            Tab(
+                selected = selectedTab == previewTabIndex,
+                onClick = { selectedTab = previewTabIndex },
+                text = {
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        sources.forEachIndexed { si, source ->
-                            InputChip(
-                                selected = false,
-                                onClick = {},
-                                label = {
-                                    Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                                        Text(
-                                            source.fileName.take(20),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                        Text(
-                                            "${source.entries.size} jeu(x)",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.primary,
-                                            fontSize = 10.sp
-                                        )
+                        Text(
+                            "Aperçu final",
+                            fontWeight = if (selectedTab == previewTabIndex) FontWeight.Bold else FontWeight.Normal
+                        )
+                        if (destEntries.isNotEmpty()) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(
+                                    "${destEntries.size}",
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+                    }
+                },
+                icon = { Icon(Icons.Default.Visibility, null, modifier = Modifier.size(16.dp)) }
+            )
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+        // ── Tab content ──
+        val tabIdx = selectedTab.coerceIn(0, tabCount - 1)
+
+        if (tabIdx < sources.size) {
+            // Source tab content
+            val si = tabIdx
+            val source = sources[si]
+            val sourceGames = source.entries.mapIndexed { gi, e -> Triple(si, gi, e) }
+
+            LazyColumn(
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                item(key = "src_header_$si") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                source.fileName,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                            Text(
+                                "${source.entries.size} jeu(x)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                sources = sources.toMutableList().also { it.removeAt(si) }
+                                editedNames = editedNames
+                                    .filterKeys { (k, _) -> k != si }
+                                    .mapKeys { (k, v) ->
+                                        if (k.first > si) (k.first - 1 to k.second) else k
                                     }
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Default.FileOpen, null,
-                                        modifier = Modifier.size(14.dp),
-                                        tint = MaterialTheme.colorScheme.primary
+                                if (selectedTab >= sources.size) selectedTab = maxOf(0, sources.size)
+                            }
+                        ) {
+                            Icon(Icons.Default.DeleteSweep, null, tint = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+
+                if (duplicateKeys.isNotEmpty()) {
+                    item(key = "dup_warning_$si") {
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.Warning, null,
+                                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    "${duplicateKeys.size} doublon(s) détecté(s) — ils seront ignorés lors de la fusion.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            }
+                        }
+                    }
+                }
+
+                itemsIndexed(
+                    sourceGames,
+                    key = { _, t -> "sg_${t.first}_${t.second}" }
+                ) { _, triple ->
+                    val (srcIdx, gi, entry) = triple
+                    val displayName = editedNames[srcIdx to gi]
+                        ?: entry.gameName.trimEnd('\u0000').ifBlank { entry.gameIdClean }
+                    val id = entry.gameIdClean.trim().uppercase()
+                    val isDup = id in duplicateKeys
+
+                    Surface(
+                        color = if (isDup)
+                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
+                        else
+                            MaterialTheme.colorScheme.surfaceContainerHighest,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                                .fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.VideogameAsset, null,
+                                modifier = Modifier.size(18.dp),
+                                tint = if (isDup) MaterialTheme.colorScheme.error
+                                       else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    displayName,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        entry.gameIdClean.trim(),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.primary
                                     )
-                                },
-                                trailingIcon = {
-                                    IconButton(
-                                        onClick = {
-                                            sources = sources.toMutableList().also { it.removeAt(si) }
-                                            editedNames = editedNames
-                                                .filterKeys { (k, _) -> k != si }
-                                                .mapKeys { (k, v) ->
-                                                    if (k.first > si) (k.first - 1 to k.second) else k
-                                                }
-                                        },
-                                        modifier = Modifier.size(16.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Close, null,
-                                            modifier = Modifier.size(14.dp),
-                                            tint = MaterialTheme.colorScheme.error
-                                        )
+                                    if (isDup) {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.errorContainer,
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                "doublon",
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.error,
+                                                fontSize = 9.sp
+                                            )
+                                        }
                                     }
+                                }
+                            }
+                            IconButton(
+                                onClick = {
+                                    editDialogText = displayName
+                                    editingKey = srcIdx to gi
                                 },
-                                shape = RoundedCornerShape(20.dp)
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Edit, null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = if (editedNames.containsKey(srcIdx to gi))
+                                        MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outline
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Preview tab
+            LazyColumn(
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                item(key = "preview_dest") {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Storage, null,
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "Destination",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    destFile.absolutePath,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp
+                                )
+                                if (destEntries.isNotEmpty()) {
+                                    Text(
+                                        "${destEntries.size} jeu(x) actuellement présent(s)",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                                    )
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = { destFolderPicker.launch(null) },
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Icon(Icons.Default.FolderOpen, null, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Changer", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                }
+
+                if (destEntries.isNotEmpty()) {
+                    item(key = "preview_header") {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Default.Games, null, modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.primary)
+                            Text(
+                                "ul.cfg actuel (${destEntries.size} jeux)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                    itemsIndexed(destEntries, key = { i, _ -> "preview_$i" }) { _, entry ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.CheckCircle, null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        entry.gameName.trimEnd('\u0000').ifBlank { entry.gameIdClean },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        entry.gameIdClean.trim(),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else if (sources.isEmpty()) {
+                    item(key = "preview_empty") {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                Icons.Default.FolderOpen, null,
+                                modifier = Modifier.size(48.dp),
+                                tint = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                "Aucune source ajoutée",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "Ajoutez des fichiers source pour commencer",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
                             )
                         }
                     }
@@ -338,310 +600,94 @@ fun UlCfgMergerScreen() {
             }
         }
 
-        // ── All source games combined ──
-        if (allSourceGames.isNotEmpty()) {
-            item(key = "games_header") {
+        // ── Bottom action bar ──
+        Surface(
+            shadowElevation = 8.dp,
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    // Add source button
+                    OutlinedButton(
+                        onClick = { filePicker.launch("*/*") },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        enabled = !isProcessing
                     ) {
+                        if (isProcessing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
+                        }
+                        Spacer(Modifier.width(6.dp))
                         Text(
-                            "Jeux à fusionner",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
+                            if (sources.isEmpty()) "Ajouter source"
+                            else "Source ${sources.size + 1}",
+                            style = MaterialTheme.typography.labelMedium
                         )
+                    }
+
+                    // Merge button
+                    Button(
+                        onClick = ::mergeAll,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        enabled = sources.isNotEmpty() && !isProcessing
+                    ) {
+                        Icon(Icons.Default.MergeType, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "Fusionner (${allSourceGames.size})",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                }
+
+                // Stats summary
+                if (sources.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Surface(
                             color = MaterialTheme.colorScheme.primaryContainer,
-                            shape = RoundedCornerShape(8.dp)
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier.weight(1f)
                         ) {
                             Text(
-                                "${allSourceGames.size}",
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                "${sources.size} source(s) · ${allSourceGames.size} jeu(x)",
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                 style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                         }
                         if (duplicateKeys.isNotEmpty()) {
                             Surface(
                                 color = MaterialTheme.colorScheme.errorContainer,
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(3.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        Icons.Default.ContentCopy, null,
-                                        modifier = Modifier.size(10.dp),
-                                        tint = MaterialTheme.colorScheme.onErrorContainer
-                                    )
-                                    Text(
-                                        "${duplicateKeys.size} doublon(s)",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onErrorContainer,
-                                        fontSize = 10.sp
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    Text(
-                        "Icône crayon = renommer",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        fontSize = 10.sp
-                    )
-                }
-            }
-
-            itemsIndexed(
-                allSourceGames,
-                key = { _, t -> "game_${t.first}_${t.second}" }
-            ) { _, triple ->
-                val (si, gi, entry) = triple
-                val displayName = editedNames[si to gi]
-                    ?: entry.gameName.trimEnd('\u0000').ifBlank { entry.gameIdClean }
-                val id = entry.gameIdClean.trim().uppercase()
-                val isDup = id in duplicateKeys
-
-                Surface(
-                    color = if (isDup)
-                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
-                    else
-                        MaterialTheme.colorScheme.surfaceContainerHighest,
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                            .fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                displayName,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                shape = RoundedCornerShape(6.dp)
                             ) {
                                 Text(
-                                    entry.gameIdClean.trim(),
+                                    "${duplicateKeys.size} doublon(s)",
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                     style = MaterialTheme.typography.labelSmall,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onErrorContainer
                                 )
-                                Text(
-                                    "• S${si + 1}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                                if (isDup) {
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.errorContainer,
-                                        shape = RoundedCornerShape(4.dp)
-                                    ) {
-                                        Text(
-                                            "doublon",
-                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.error,
-                                            fontSize = 9.sp
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        IconButton(
-                            onClick = {
-                                editDialogText = displayName
-                                editingKey = si to gi
-                            },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Edit, null,
-                                modifier = Modifier.size(16.dp),
-                                tint = if (editedNames.containsKey(si to gi))
-                                    MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.outline
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── Destination card ──
-        item(key = "dest_card") {
-            Card(
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.Storage, null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                "Destination",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                destFile.absolutePath,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontSize = 10.sp
-                            )
-                            Text(
-                                if (destEntries.isNotEmpty()) "${destEntries.size} jeu(x) présent(s)"
-                                else "Vide ou inexistant",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (destEntries.isNotEmpty()) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.outline
-                            )
-                        }
-                        IconButton(onClick = {
-                            scope.launch {
-                                withContext(Dispatchers.IO) {
-                                    destEntries = if (destFile.exists())
-                                        cfgManager.readAllEntries(destFile) else emptyList()
-                                }
-                            }
-                        }) {
-                            Icon(Icons.Default.Refresh, null)
-                        }
-                    }
-                    // Pick destination folder
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = { destFolderPicker.launch(null) },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
-                        ) {
-                            Icon(Icons.Default.FolderOpen, null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Choisir le dossier", style = MaterialTheme.typography.labelMedium)
-                        }
-                        if (destPath != null) {
-                            OutlinedButton(
-                                onClick = { destPath = null; resultMessage = null },
-                                shape = RoundedCornerShape(10.dp),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.RestartAlt, null,
-                                    modifier = Modifier.size(16.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text("Par défaut", style = MaterialTheme.typography.labelMedium)
                             }
                         }
                     }
                 }
             }
         }
-
-        // ── Result message ──
-        resultMessage?.let { msg ->
-            item(key = "result") {
-                val isOk = msg.startsWith("✓")
-                Surface(
-                    color = if (isOk) MaterialTheme.colorScheme.secondaryContainer
-                    else MaterialTheme.colorScheme.errorContainer,
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp).fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            if (isOk) Icons.Default.CheckCircle else Icons.Default.Error,
-                            null,
-                            tint = if (isOk) Color(0xFF4CAF50) else MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(
-                            msg,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (isOk) MaterialTheme.colorScheme.onSecondaryContainer
-                            else MaterialTheme.colorScheme.onErrorContainer,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(
-                            onClick = { resultMessage = null },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(Icons.Default.Close, null, modifier = Modifier.size(16.dp))
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── Action buttons ──
-        item(key = "actions") {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                val newCount = allSourceGames.count { (_, _, e) ->
-                    e.gameIdClean.trim().uppercase() !in duplicateKeys
-                }
-                Button(
-                    onClick = { mergeAll() },
-                    enabled = sources.isNotEmpty() && !isProcessing,
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    if (isProcessing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text("Fusion en cours…")
-                    } else {
-                        Icon(Icons.Default.MergeType, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "Fusionner ($newCount nouveau(x))",
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-                if (allSourceGames.isNotEmpty() && duplicateKeys.isNotEmpty()) {
-                    Text(
-                        "${duplicateKeys.size} doublon(s) sera(ont) ignoré(s) — $newCount jeu(x) sera(ont) ajouté(s)",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
-                }
-            }
-        }
-
-        item { Spacer(Modifier.height(24.dp)) }
     }
 }

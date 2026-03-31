@@ -13,7 +13,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,6 +37,8 @@ fun GameCard(
     isSelected: Boolean = false,
     isMultiSelectMode: Boolean = false,
     onConvertClick: () -> Unit,
+    onSelectClick: () -> Unit,
+    onDeleteClick: () -> Unit,
     onPauseClick: () -> Unit,
     onResumeClick: () -> Unit,
     onCancelClick: () -> Unit,
@@ -77,7 +79,6 @@ fun GameCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // Multi-select checkbox or cover art
                     if (isMultiSelectMode) {
                         Box(
                             modifier = Modifier
@@ -103,7 +104,6 @@ fun GameCard(
                         CoverThumbnail(game = game, onFetchCoverClick = onFetchCoverClick)
                     }
 
-                    // Game info
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = game.title,
@@ -127,11 +127,13 @@ fun GameCard(
                         }
                     }
 
-                    // Status & actions (hidden in multi-select mode)
                     if (!isMultiSelectMode) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
                             StatusIcon(game.conversionStatus)
-                            Spacer(Modifier.height(4.dp))
+                            Spacer(Modifier.height(2.dp))
                             ActionButton(
                                 game = game,
                                 progress = progress,
@@ -140,14 +142,234 @@ fun GameCard(
                                 onResumeClick = onResumeClick,
                                 onCancelClick = onCancelClick
                             )
+                            // Select button
+                            IconButton(
+                                onClick = onSelectClick,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.CheckBoxOutlineBlank,
+                                    contentDescription = "Sélectionner",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.outline
+                                )
+                            }
+                            // Delete button
+                            IconButton(
+                                onClick = onDeleteClick,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.DeleteOutline,
+                                    contentDescription = "Supprimer",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
                         }
                     }
                 }
 
-                // Progress bar (shown when converting)
                 if (progress != null && !isMultiSelectMode) {
                     Spacer(Modifier.height(8.dp))
                     ConversionProgressRow(progress)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun GameGridCard(
+    game: Ps2Game,
+    progress: ConversionProgress?,
+    isSelected: Boolean = false,
+    isMultiSelectMode: Boolean = false,
+    onSelectClick: () -> Unit,
+    onConvertClick: () -> Unit,
+    onDeleteClick: () -> Unit,
+    onFetchCoverClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val borderColor by animateColorAsState(
+        targetValue = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "border"
+    )
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (isSelected) Modifier.border(2.dp, borderColor, RoundedCornerShape(16.dp))
+                else Modifier
+            ),
+        shape = RoundedCornerShape(16.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 6.dp else 3.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column {
+            // Cover image
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(0.75f)
+                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                    .clickable(onClick = onFetchCoverClick),
+                contentAlignment = Alignment.Center
+            ) {
+                if (game.coverPath != null && File(game.coverPath).exists()) {
+                    AsyncImage(
+                        model = File(game.coverPath),
+                        contentDescription = game.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.VideogameAsset,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            modifier = Modifier.size(40.dp)
+                        )
+                        Text(
+                            text = "COVER",
+                            fontSize = 9.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                        )
+                    }
+                }
+
+                // Selection overlay
+                if (isMultiSelectMode) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(6.dp)
+                            .size(24.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (isSelected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
+                            )
+                            .clickable(onClick = onSelectClick),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isSelected) {
+                            Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(14.dp))
+                        }
+                    }
+                }
+
+                // Status badge
+                Surface(
+                    modifier = Modifier.align(Alignment.TopEnd).padding(6.dp),
+                    shape = CircleShape,
+                    color = when (game.conversionStatus) {
+                        ConversionStatus.COMPLETED -> Color(0xFF4CAF50)
+                        ConversionStatus.IN_PROGRESS -> MaterialTheme.colorScheme.primary
+                        ConversionStatus.ERROR -> MaterialTheme.colorScheme.error
+                        ConversionStatus.PAUSED -> MaterialTheme.colorScheme.tertiary
+                        ConversionStatus.NOT_CONVERTED -> MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                    }
+                ) {
+                    Icon(
+                        when (game.conversionStatus) {
+                            ConversionStatus.COMPLETED -> Icons.Default.CheckCircle
+                            ConversionStatus.IN_PROGRESS -> Icons.Default.Sync
+                            ConversionStatus.ERROR -> Icons.Default.ErrorOutline
+                            ConversionStatus.PAUSED -> Icons.Default.Pause
+                            ConversionStatus.NOT_CONVERTED -> Icons.Default.RadioButtonUnchecked
+                        },
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp).padding(2.dp)
+                    )
+                }
+            }
+
+            // Progress bar (if active)
+            if (progress != null) {
+                LinearProgressIndicator(
+                    progress = { progress.percent },
+                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                )
+            }
+
+            // Info & action buttons
+            Column(modifier = Modifier.padding(8.dp)) {
+                Text(
+                    text = game.title,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = 16.sp
+                )
+                if (game.gameId.isNotBlank()) {
+                    Text(
+                        text = game.gameId,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 10.sp,
+                        maxLines = 1
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RegionChip(game.region)
+                    if (!isMultiSelectMode) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            // Select
+                            IconButton(
+                                onClick = onSelectClick,
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.CheckBoxOutlineBlank,
+                                    null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.outline
+                                )
+                            }
+                            // Convert
+                            if (game.conversionStatus != ConversionStatus.COMPLETED) {
+                                IconButton(
+                                    onClick = onConvertClick,
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Transform,
+                                        null,
+                                        modifier = Modifier.size(14.dp),
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                            // Delete
+                            IconButton(
+                                onClick = onDeleteClick,
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.DeleteOutline,
+                                    null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -257,7 +479,7 @@ private fun ActionButton(
                     Icon(Icons.Default.PlayArrow, "Resume", modifier = Modifier.size(18.dp))
                 }
                 IconButton(onClick = onCancelClick, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.Delete, "Cancel", modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Close, "Cancel", modifier = Modifier.size(18.dp))
                 }
             }
         }

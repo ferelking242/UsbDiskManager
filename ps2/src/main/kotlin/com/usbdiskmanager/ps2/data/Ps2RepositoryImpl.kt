@@ -221,4 +221,18 @@ class Ps2RepositoryImpl @Inject constructor(
 
     private fun partCount(totalBytes: Long): Int =
         ((totalBytes + UL_PART_SIZE - 1) / UL_PART_SIZE).toInt()
+
+    override suspend fun deleteGame(game: com.usbdiskmanager.ps2.domain.model.Ps2Game): Boolean {
+        return try {
+            val file = File(game.isoPath)
+            val deleted = if (file.exists()) file.delete() else true
+            if (deleted) {
+                _games.update { list -> list.filter { it.id != game.id } }
+            }
+            deleted
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to delete game: ${game.isoPath}")
+            false
+        }
+    }
 }
