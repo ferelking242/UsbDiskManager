@@ -574,8 +574,8 @@ class TelegramChannelService @Inject constructor(
 
             val rawText = textPat.find(body)?.groupValues?.get(1)
                 ?.replace(Regex("<[^>]+>"), " ")
-                ?.replace("&amp;", "&").replace("&lt;", "<")
-                ?.replace("&gt;", ">").replace("&nbsp;", " ")
+                ?.replace("&amp;", "&")?.replace("&lt;", "<")
+                ?.replace("&gt;", ">")?.replace("&nbsp;", " ")
                 ?.trim() ?: ""
 
             if (rawText.isNotBlank() && isNoise(rawText)) continue
