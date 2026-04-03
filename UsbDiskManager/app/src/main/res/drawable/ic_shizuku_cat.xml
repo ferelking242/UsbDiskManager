@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- Cat head -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,3.5C8.13,3.5 5,6.63 5,10.5c0,3.87 3.13,7 7,7s7,-3.13 7,-7C19,6.63 15.87,3.5 12,3.5z"/>
+
+    <!-- Left ear -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M6.5,7.5L4.5,3.5L9,6.5L6.5,7.5z"/>
+
+    <!-- Right ear -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M17.5,7.5L19.5,3.5L15,6.5L17.5,7.5z"/>
+
+    <!-- Left ear inner -->
+    <path
+        android:fillColor="#FFB6C1"
+        android:pathData="M6.5,7L5.2,4.5L8.5,6.5L6.5,7z"/>
+
+    <!-- Right ear inner -->
+    <path
+        android:fillColor="#FFB6C1"
+        android:pathData="M17.5,7L18.8,4.5L15.5,6.5L17.5,7z"/>
+
+    <!-- Left eye -->
+    <path
+        android:fillColor="#1A237E"
+        android:pathData="M9.5,10.5C9.5,9.67 10.17,9 11,9C11.83,9 12.5,9.67 12.5,10.5C12.5,11.33 11.83,12 11,12C10.17,12 9.5,11.33 9.5,10.5z"/>
+
+    <!-- Right eye -->
+    <path
+        android:fillColor="#1A237E"
+        android:pathData="M11.5,10.5C11.5,9.67 12.17,9 13,9C13.83,9 14.5,9.67 14.5,10.5C14.5,11.33 13.83,12 13,12C12.17,12 11.5,11.33 11.5,10.5z"/>
+
+    <!-- Eye shine left -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M10.2,9.8C10.2,9.47 10.47,9.2 10.8,9.2C11.13,9.2 11.4,9.47 11.4,9.8C11.4,10.13 11.13,10.4 10.8,10.4C10.47,10.4 10.2,10.13 10.2,9.8z"/>
+
+    <!-- Nose -->
+    <path
+        android:fillColor="#FF80AB"
+        android:pathData="M11.5,12.5L12,13L12.5,12.5L12,12L11.5,12.5z"/>
+
+    <!-- Mouth -->
+    <path
+        android:strokeColor="#AAAAAA"
+        android:strokeWidth="0.6"
+        android:strokeLineCap="round"
+        android:pathData="M12,13L11,13.8"/>
+
+    <path
+        android:strokeColor="#AAAAAA"
+        android:strokeWidth="0.6"
+        android:strokeLineCap="round"
+        android:pathData="M12,13L13,13.8"/>
+
+    <!-- Whiskers left -->
+    <path
+        android:strokeColor="#AAAAAA"
+        android:strokeWidth="0.5"
+        android:strokeLineCap="round"
+        android:pathData="M5.5,11L10,12.3"/>
+
+    <path
+        android:strokeColor="#AAAAAA"
+        android:strokeWidth="0.5"
+        android:strokeLineCap="round"
+        android:pathData="M5.5,13L10,12.7"/>
+
+    <!-- Whiskers right -->
+    <path
+        android:strokeColor="#AAAAAA"
+        android:strokeWidth="0.5"
+        android:strokeLineCap="round"
+        android:pathData="M18.5,11L14,12.3"/>
+
+    <path
+        android:strokeColor="#AAAAAA"
+        android:strokeWidth="0.5"
+        android:strokeLineCap="round"
+        android:pathData="M18.5,13L14,12.7"/>
+
+    <!-- Body hint -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M8,17.5C8,17.5 9,20.5 12,20.5C15,20.5 16,17.5 16,17.5L8,17.5z"/>
+
+</vector>

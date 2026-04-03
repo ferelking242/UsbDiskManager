@@ -1,0 +1,47 @@
+l'App bug
+FATAL EXCEPTION: main
+Process: com.usbdiskmanager, PID: 12442
+java.lang.RuntimeException: Unable to start activity ComponentInfo{com.usbdiskmanager/com.usbdiskmanager.MainActivity}: java.lang.SecurityException: User has not given 10280/com.usbdiskmanager permission to access device /dev/bus/usb/001/003
+	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:3800)
+	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:3937)
+	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:101)
+	at android.app.servertransaction.TransactionExecutor.executeCallbacks(TransactionExecutor.java:137)
+	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:97)
+	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:2423)
+	at android.os.Handler.dispatchMessage(Handler.java:106)
+	at android.os.Looper.loopOnce(Looper.java:201)
+	at android.os.Looper.loop(Looper.java:288)
+	at android.app.ActivityThread.main(ActivityThread.java:8115)
+	at java.lang.reflect.Method.invoke(Native Method)
+	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:703)
+	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:911)
+Caused by: java.lang.SecurityException: User has not given 10280/com.usbdiskmanager permission to access device /dev/bus/usb/001/003
+	at android.os.Parcel.createExceptionOrNull(Parcel.java:3039)
+	at android.os.Parcel.createException(Parcel.java:3023)
+	at android.os.Parcel.readException(Parcel.java:3006)
+	at android.os.Parcel.readException(Parcel.java:2948)
+	at android.hardware.usb.IUsbSerialReader$Stub$Proxy.getSerial(IUsbSerialReader.java:126)
+	at android.hardware.usb.UsbDevice.getSerialNumber(UsbDevice.java:157)
+	at f1.l.a(Unknown Source:160)
+	at f1.l.o(Unknown Source:184)
+	at f1.l.<init>(Unknown Source:54)
+	at I0.f.get(Unknown Source:318)
+	at h1.a.get(Unknown Source:13)
+	at I0.m.a(Unknown Source:27)
+	at b.j.onCreate(Unknown Source:30)
+	at com.usbdiskmanager.MainActivity.k(Unknown Source:0)
+	at com.usbdiskmanager.MainActivity.onCreate(Unknown Source:2)
+	at android.app.Activity.performCreate(Activity.java:8341)
+	at android.app.Activity.performCreate(Activity.java:8320)
+	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1388)
+	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:3780)
+	... 12 more
+Caused by: android.os.RemoteException: Remote stack trace:
+	at com.android.server.usb.UsbUserPermissionManager.checkPermission(UsbUserPermissionManager.java:678)
+	at com.android.server.usb.UsbSerialReader.getSerial(UsbSerialReader.java:98)
+	at android.hardware.usb.IUsbSerialReader$Stub.onTransact(IUsbSerialReader.java:89)
+	at android.os.Binder.execTransactInternal(Binder.java:1281)
+	at android.os.Binder.execTransact(Binder.java:1244)
+
+
+Si je branche la USB et lance l'App ça fait que crash bordel fix ça ensuite demande moi le GIT_PAT.  (Via replit Secret) ensuite utiliser le pour tout push sur github ensuite lis les log voir si le ci se build bien

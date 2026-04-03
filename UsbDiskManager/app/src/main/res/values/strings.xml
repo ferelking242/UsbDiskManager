@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">USB Disk Manager</string>
+
+    <!-- General -->
+    <string name="cancel">Cancel</string>
+    <string name="close">Close</string>
+    <string name="ok">OK</string>
+    <string name="retry">Retry</string>
+    <string name="refresh">Refresh</string>
+    <string name="settings">Settings</string>
+    <string name="logs">Logs</string>
+    <string name="back">Back</string>
+    <string name="loading">Loading...</string>
+    <string name="yes">Yes</string>
+    <string name="no">No</string>
+    <string name="open">Open</string>
+    <string name="install">Install</string>
+
+    <!-- Dashboard -->
+    <string name="dashboard_title">USB Disk Manager</string>
+    <string name="no_devices_found">No USB device detected</string>
+    <string name="no_devices_hint">Connect a USB key via OTG\nthen press Refresh</string>
+    <string name="device_mounted">Mounted</string>
+    <string name="device_not_mounted">Not mounted</string>
+    <string name="action_mount">Mount</string>
+    <string name="action_eject">Eject</string>
+    <string name="action_details">Details</string>
+    <string name="storage_total">Total</string>
+    <string name="storage_used">Used</string>
+    <string name="storage_free">Free</string>
+    <string name="storage_type">Type</string>
+
+    <!-- Shizuku -->
+    <string name="shizuku_title">Shizuku — Privileged Access</string>
+    <string name="shizuku_ready">Shizuku active — privileged access</string>
+    <string name="shizuku_not_installed">Shizuku not installed</string>
+    <string name="shizuku_not_running">Shizuku not started</string>
+    <string name="shizuku_permission_required">Shizuku permission required</string>
+    <string name="shizuku_permission_denied">Shizuku permission denied</string>
+    <string name="shizuku_grant">Authorize</string>
+    <string name="shizuku_retry">Retry</string>
+    <string name="shizuku_detail_ready">NTFS/EXT4/format/blkid unlocked</string>
+    <string name="shizuku_detail_permission_pending">Shizuku is ready — tap to enable privileged access</string>
+    <string name="shizuku_detail_permission_denied">Permission denied — tap to request again</string>
+    <string name="shizuku_detail_not_running">Start via ADB: adb shell sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh</string>
+    <string name="shizuku_detail_not_installed">Install the Shizuku app from the Play Store to unlock NTFS/EXT4/format</string>
+    <string name="shizuku_open_app">Open Shizuku</string>
+    <string name="shizuku_install_playstore">Install from Play Store</string>
+    <string name="shizuku_what_is">What is Shizuku?</string>
+    <string name="shizuku_description">Shizuku allows this app to run privileged shell commands (ADB level) without root. This unlocks: mounting NTFS/EXT4, formatting, blkid, fdisk, and more.</string>
+    <string name="shizuku_playstore_url">https://play.google.com/store/apps/details?id=moe.shizuku.privileged.api</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_language">Language</string>
+    <string name="settings_language_auto">Auto (system)</string>
+    <string name="settings_language_en">English</string>
+    <string name="settings_language_fr">French</string>
+    <string name="settings_language_es">Spanish</string>
+    <string name="settings_language_de">German</string>
+    <string name="settings_language_pt">Portuguese</string>
+    <string name="settings_section_general">General</string>
+    <string name="settings_section_shizuku">Shizuku — Privileged Access</string>
+    <string name="settings_section_about">About</string>
+    <string name="settings_theme">Theme</string>
+    <string name="settings_theme_system">System default</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_shizuku_status">Status</string>
+    <string name="settings_shizuku_request_permission">Request permission</string>
+    <string name="settings_version">Version</string>
+    <string name="settings_about_description">USB Disk Manager — manage USB/OTG drives directly from your Android device. Supports FAT32, exFAT, NTFS, EXT4 and more (with Shizuku).</string>
+
+    <!-- Format -->
+    <string name="format_title">Format</string>
+    <string name="format_confirm_title">Format Disk?</string>
+    <string name="format_confirm_message">This will PERMANENTLY ERASE all data on this disk. This cannot be undone. Are you sure?</string>
+    <string name="format_confirm_button">Format Now</string>
+    <string name="format_label_hint">Volume label (optional)</string>
+
+    <!-- Disk detail -->
+    <string name="disk_detail_title">Disk Details</string>
+    <string name="disk_info">Information</string>
+    <string name="disk_serial">Serial</string>
+    <string name="disk_vendor">Vendor ID</string>
+    <string name="disk_product">Product ID</string>
+    <string name="disk_filesystem">File System</string>
+    <string name="disk_mount_point">Mount Point</string>
+    <string name="disk_operations">Operations</string>
+    <string name="disk_benchmark">Benchmark</string>
+    <string name="disk_explore_files">Explore Files</string>
+
+    <!-- Benchmark -->
+    <string name="benchmark_title">Benchmark</string>
+    <string name="benchmark_read">Read Speed</string>
+    <string name="benchmark_write">Write Speed</string>
+    <string name="benchmark_start">Start Benchmark</string>
+
+    <!-- File explorer -->
+    <string name="file_explorer_title">File Explorer</string>
+    <string name="copy">Copy</string>
+    <string name="paste">Paste</string>
+    <string name="delete">Delete</string>
+    <string name="move">Move</string>
+    <string name="rename">Rename</string>
+    <string name="new_folder">New Folder</string>
+    <string name="select_all">Select All</string>
+
+    <!-- Permissions -->
+    <string name="permission_usb_rationale">USB permission is required to access connected USB devices.</string>
+    <string name="permission_storage_rationale">Storage access is required to read and write files on USB disks.</string>
+
+    <!-- Notification -->
+    <string name="notif_channel_name">USB Monitor</string>
+    <string name="notif_channel_desc">Monitors USB devices in the background</string>
+    <string name="notif_waiting">Waiting for USB device...</string>
+    <string name="notif_devices_connected">%d USB device(s) connected</string>
+
+    <plurals name="notif_devices_connected_plural">
+        <item quantity="one">%d USB device connected</item>
+        <item quantity="other">%d USB devices connected</item>
+    </plurals>
+</resources>
