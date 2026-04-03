@@ -470,6 +470,13 @@ private fun TelegramBrowserScreen(viewModel: Ps2ViewModel, tgState: TelegramUiSt
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // ── Chip "Tout" ──
+            FilterChip(
+                selected = tgState.selectedChannel == null,
+                onClick = { viewModel.selectTelegramChannel(null) },
+                label = { Text("Tout", style = MaterialTheme.typography.labelSmall, fontWeight = if (tgState.selectedChannel == null) FontWeight.Bold else FontWeight.Normal) },
+                leadingIcon = { Icon(Icons.Default.DoneAll, null, modifier = Modifier.size(13.dp)) }
+            )
             tgState.channels.forEach { chan ->
                 FilterChip(
                     selected = tgState.selectedChannel == chan.username,

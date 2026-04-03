@@ -128,10 +128,7 @@ private const val KEY_CHANNELS = "channels"
 private const val KEY_PHONE    = "phone"
 
 private val DEFAULT_CHANNELS = listOf(
-    TelegramChannelConfig("opens_ps2", "Opens PS2"),
-    TelegramChannelConfig("pcsx2iso", "Playstation 2 Roms"),
-    TelegramChannelConfig("ps2isodl", "PS2 ISO Downloads"),
-    TelegramChannelConfig("PSXGames", "PSX / PS2 Games")
+    TelegramChannelConfig("opens_ps2", "Opens PS2")
 )
 
 // ─── Service ──────────────────────────────────────────────────────────────────
@@ -369,9 +366,15 @@ class TelegramChannelService @Inject constructor(
                     }
 
                     is TdApi.MessagePhoto -> {
-                        // Photos after the anchor are gameplay screenshots
                         val id = extractPhotoThumbnailId(next)
-                        if (id > 0) screenshots.add(id)
+                        if (id > 0) {
+                            // First photo in forward scan before any docs = cover (opens_ps2 style)
+                            if (coverFileId == 0 && fileParts.isEmpty()) {
+                                coverFileId = id
+                            } else {
+                                screenshots.add(id)
+                            }
+                        }
                     }
 
                     is TdApi.MessageDocument -> {

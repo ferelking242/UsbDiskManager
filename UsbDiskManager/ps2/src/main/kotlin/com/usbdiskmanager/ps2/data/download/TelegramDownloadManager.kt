@@ -1,5 +1,6 @@
 package com.usbdiskmanager.ps2.data.download
 
+import java.util.zip.ZipInputStream
 import android.content.Context
 import com.usbdiskmanager.ps2.data.scanner.IsoScanner
 import com.usbdiskmanager.ps2.telegram.TDLibClient
@@ -105,6 +106,44 @@ class TelegramDownloadManager @Inject constructor(
                     id, entity.fileName, 0L, entity.fileSizeBytes,
                     TgDownloadStatus.ERROR, error = "Annulé"
                 ))
+            }
+        }
+    }
+
+
+    fun pause(id: String) {
+        activeJobs[id]?.cancel()
+        activeJobs.remove(id)
+        scope.launch {
+            dao.updateStatus(id, TgDownloadStatus.PAUSED)
+            _downloads.update { map ->
+                val prev = map[id] ?: return@update map
+                map + (id to prev.copy(status = TgDownloadStatus.PAUSED))
+            }
+        }
+    }
+
+    fun resume(id: String) {
+        if (activeJobs[id]?.isActive == true) return
+        scope.launch {
+            val entity = dao.getDownload(id) ?: return@launch
+            dao.updateStatus(id, TgDownloadStatus.QUEUED)
+            _downloads.update { map ->
+                val prev = map[id] ?: return@update map
+                map + (id to prev.copy(status = TgDownloadStatus.QUEUED))
+            }
+            if (entity.tdlibFileId > 0) {
+                try {
+                    val file = tdlib.getFile(entity.tdlibFileId)
+                    if (file.local?.isDownloadingCompleted == true && file.local?.path != null) {
+                        finalize(entity.id, file.local!!.path!!)
+                        return@launch
+                    }
+                    setProgress(entity, entity.bytesDownloaded, TgDownloadStatus.DOWNLOADING)
+                    tdlib.startDownload(entity.tdlibFileId, priority = 32)
+                } catch (e: Exception) { startFetch(entity) }
+            } else {
+                startFetch(entity)
             }
         }
     }
@@ -222,6 +261,29 @@ class TelegramDownloadManager @Inject constructor(
                 dst.parentFile?.mkdirs()
                 src.copyTo(dst, overwrite = true)
                 src.delete()
+            }
+            // ── Auto-extract ZIP archives after download ──────────────────
+            val ext = dst.extension.lowercase()
+            if (ext == "zip" && dst.exists()) {
+                val isoDir = File(IsoScanner.DEFAULT_ISO_DIR).also { it.mkdirs() }
+                try {
+                    ZipInputStream(dst.inputStream().buffered()).use { zip ->
+                        var entry = zip.nextEntry
+                        while (entry != null) {
+                            val entryExt = entry.name.substringAfterLast(".").lowercase()
+                            if (!entry.isDirectory && entryExt in setOf("iso","bin","chd","img","mdf")) {
+                                val outFile = File(isoDir, File(entry.name).name)
+                                outFile.outputStream().buffered().use { zip.copyTo(it) }
+                                Timber.i("Extracted: ${entry.name} → ${outFile.absolutePath}")
+                            }
+                            zip.closeEntry()
+                            entry = zip.nextEntry
+                        }
+                    }
+                    dst.delete()
+                } catch (e: Exception) {
+                    Timber.w(e, "ZIP extraction failed: ${dst.name}")
+                }
             }
             dao.updateStatus(id, TgDownloadStatus.DONE)
             speedTracker.remove(id)

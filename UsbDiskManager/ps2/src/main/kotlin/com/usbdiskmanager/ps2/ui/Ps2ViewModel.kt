@@ -101,7 +101,7 @@ data class Ps2UiState(
 
 enum class SortMode { TITLE, SIZE, STATUS }
 
-enum class Ps2Tab { GAMES, MERGE_CFG, UL_MANAGER, DOWNLOAD, TRANSFER, TELEGRAM }
+enum class Ps2Tab { GAMES, MERGE_CFG, UL_MANAGER, TRANSFER, TELEGRAM }
 
 data class TelegramUiState(
     val isConfigured: Boolean = false,
@@ -855,7 +855,6 @@ class Ps2ViewModel @Inject constructor(
 
     fun disconnectTelegram() {
         viewModelScope.launch {
-            telegramService.logOut()
             telegramService.clearSetup()
             _uiState.update { s ->
                 s.copy(telegramState = TelegramUiState(isConfigured = false))
@@ -928,6 +927,7 @@ class Ps2ViewModel @Inject constructor(
                     allPosts = allPosts.sortedByDescending { it.date },
                     isLoading = false,
                     lastTdlibIdByChannel = lastIds
+                    selectedChannel = s.telegramState.selectedChannel ?: channels.firstOrNull()?.username,
                 ))
             }
             if (useTDLib) loadThumbnailsInBackground(allPosts)
@@ -1013,6 +1013,15 @@ class Ps2ViewModel @Inject constructor(
 
     fun cancelTelegramDownload(id: String) {
         telegramDownloadManager.cancel(id)
+    }
+
+
+    fun pauseTelegramDownload(id: String) {
+        telegramDownloadManager.pause(id)
+    }
+
+    fun resumeTelegramDownload(id: String) {
+        telegramDownloadManager.resume(id)
     }
 
     fun clearTelegramError() {

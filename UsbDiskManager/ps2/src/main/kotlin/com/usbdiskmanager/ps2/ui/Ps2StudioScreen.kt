@@ -42,6 +42,11 @@ import com.usbdiskmanager.ps2.ui.components.BatchConversionDialog
 import com.usbdiskmanager.ps2.ui.components.ConversionDialog
 import com.usbdiskmanager.ps2.ui.components.Fat32WarningDialog
 import com.usbdiskmanager.ps2.ui.components.GameCard
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -235,7 +240,6 @@ fun Ps2StudioScreen(
                                         Ps2Tab.GAMES      -> "Jeux"
                                         Ps2Tab.MERGE_CFG  -> "Fusionner CFG"
                                         Ps2Tab.UL_MANAGER -> "UL Manager"
-                                        Ps2Tab.DOWNLOAD   -> "Archive.org"
                                         Ps2Tab.TRANSFER   -> "Transfert"
                                         Ps2Tab.TELEGRAM   -> "Telegram"
                                     },
@@ -249,7 +253,6 @@ fun Ps2StudioScreen(
                                         Ps2Tab.GAMES      -> Icons.Default.VideogameAsset
                                         Ps2Tab.MERGE_CFG  -> Icons.Default.MergeType
                                         Ps2Tab.UL_MANAGER -> Icons.Default.ManageSearch
-                                        Ps2Tab.DOWNLOAD   -> Icons.Default.Download
                                         Ps2Tab.TRANSFER   -> Icons.Default.SwapHoriz
                                         Ps2Tab.TELEGRAM   -> Icons.Default.Send
                                     },
@@ -286,7 +289,6 @@ fun Ps2StudioScreen(
                     )
                     Ps2Tab.MERGE_CFG  -> UlCfgMergerScreen()
                     Ps2Tab.UL_MANAGER -> UlManagerScreen(viewModel = viewModel)
-                    Ps2Tab.DOWNLOAD   -> Ps2DownloadScreen(viewModel = viewModel)
                     Ps2Tab.TRANSFER   -> UsbTransferScreen(viewModel = viewModel)
                     Ps2Tab.TELEGRAM   -> TelegramDownloadScreen(viewModel = viewModel)
                 }
@@ -498,177 +500,208 @@ private fun EmptyState(modifier: Modifier = Modifier, onPickFolder: () -> Unit) 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DownloadManagerSheet(
-    downloads: Map<String, com.usbdiskmanager.ps2.data.download.TgDownloadProgress>,
-    onDismiss: () -> Unit
-) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+      downloads: Map<String, com.usbdiskmanager.ps2.data.download.TgDownloadProgress>,
+      viewModel: Ps2ViewModel,
+      onDismiss: () -> Unit
+  ) {
+      val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+      var filter by remember { mutableStateOf<TgDownloadStatus?>(null) }
+      val context = LocalContext.current
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "Gestionnaire de téléchargements",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                val total = downloads.size
-                val active = downloads.values.count {
-                    it.status == TgDownloadStatus.DOWNLOADING || it.status == TgDownloadStatus.QUEUED
-                }
-                if (total > 0) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        shape = RoundedCornerShape(20.dp)
-                    ) {
-                        Text(
-                            "$active actif · $total total",
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    }
-                }
-            }
+      ModalBottomSheet(
+          onDismissRequest = onDismiss,
+          sheetState = sheetState,
+          dragHandle = {
+              Column(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalAlignment = Alignment.CenterHorizontally
+              ) {
+                  BottomSheetDefaults.DragHandle()
+                  Row(
+                      modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                      horizontalArrangement = Arrangement.SpaceBetween,
+                      verticalAlignment = Alignment.CenterVertically
+                  ) {
+                      Text("Téléchargements", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                      IconButton(onClick = {
+                          val dir = java.io.File(com.usbdiskmanager.ps2.data.scanner.IsoScanner.BASE_DIR)
+                          if (dir.exists()) {
+                              try {
+                                  val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                      setDataAndType(androidx.core.content.FileProvider.getUriForFile(
+                                          context, context.packageName + ".provider", dir), "resource/folder")
+                                      addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                  }
+                                  context.startActivity(intent)
+                              } catch (e: Exception) {
+                                  android.widget.Toast.makeText(context, dir.absolutePath, android.widget.Toast.LENGTH_LONG).show()
+                              }
+                          }
+                      }) {
+                          Icon(Icons.Default.Folder, contentDescription = "Ouvrir dossier", tint = MaterialTheme.colorScheme.primary)
+                      }
+                  }
+              }
+          }
+      ) {
+          Column(modifier = Modifier.fillMaxWidth()) {
+              // ── Filtre chips ──
+              Row(
+                  modifier = Modifier
+                      .fillMaxWidth()
+                      .horizontalScroll(androidx.compose.foundation.rememberScrollState())
+                      .padding(horizontal = 12.dp, vertical = 4.dp),
+                  horizontalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                  FilterChip(selected = filter == null, onClick = { filter = null }, label = { Text("Tout", style = MaterialTheme.typography.labelSmall) })
+                  FilterChip(selected = filter == TgDownloadStatus.DOWNLOADING, onClick = { filter = TgDownloadStatus.DOWNLOADING }, label = { Text("Actif", style = MaterialTheme.typography.labelSmall) }, leadingIcon = { Icon(Icons.Default.Downloading, null, modifier = Modifier.size(14.dp)) })
+                  FilterChip(selected = filter == TgDownloadStatus.PAUSED, onClick = { filter = TgDownloadStatus.PAUSED }, label = { Text("Pause", style = MaterialTheme.typography.labelSmall) }, leadingIcon = { Icon(Icons.Default.Pause, null, modifier = Modifier.size(14.dp)) })
+                  FilterChip(selected = filter == TgDownloadStatus.DONE, onClick = { filter = TgDownloadStatus.DONE }, label = { Text("Terminé", style = MaterialTheme.typography.labelSmall) }, leadingIcon = { Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(14.dp)) })
+                  FilterChip(selected = filter == TgDownloadStatus.ERROR, onClick = { filter = TgDownloadStatus.ERROR }, label = { Text("Erreur", style = MaterialTheme.typography.labelSmall) }, leadingIcon = { Icon(Icons.Default.Error, null, modifier = Modifier.size(14.dp)) })
+              }
 
-            if (downloads.isEmpty()) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 40.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Icon(
-                        Icons.Default.DownloadDone,
-                        null,
-                        modifier = Modifier.size(52.dp),
-                        tint = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        "Aucun téléchargement",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            } else {
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(bottom = 32.dp)
-                ) {
-                    val sorted = downloads.entries.sortedWith(
-                        compareBy {
-                            when (it.value.status) {
-                                TgDownloadStatus.DOWNLOADING -> 0
-                                TgDownloadStatus.QUEUED -> 1
-                                TgDownloadStatus.ERROR -> 2
-                                TgDownloadStatus.DONE -> 3
-                                else -> 4
-                            }
-                        }
-                    )
-                    items(sorted, key = { it.key }) { (id, prog) ->
-                        DownloadRow(downloadId = id, progress = prog)
-                    }
-                }
-            }
-        }
-    }
-}
+              HorizontalDivider()
+
+              val filtered = downloads.entries
+                  .filter { filter == null || it.value.status == filter }
+                  .sortedWith(compareBy {
+                      when (it.value.status) {
+                          TgDownloadStatus.DOWNLOADING -> 0
+                          TgDownloadStatus.QUEUED -> 1
+                          TgDownloadStatus.PAUSED -> 2
+                          TgDownloadStatus.ERROR -> 3
+                          TgDownloadStatus.DONE -> 4
+                          else -> 5
+                      }
+                  })
+
+              if (filtered.isEmpty()) {
+                  Column(
+                      modifier = Modifier.fillMaxWidth().padding(vertical = 40.dp),
+                      horizontalAlignment = Alignment.CenterHorizontally
+                  ) {
+                      Icon(Icons.Default.DownloadDone, null, modifier = Modifier.size(52.dp), tint = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                      Spacer(Modifier.height(12.dp))
+                      Text("Aucun téléchargement", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                  }
+              } else {
+                  LazyColumn(
+                      verticalArrangement = Arrangement.spacedBy(8.dp),
+                      contentPadding = PaddingValues(horizontal = 12.dp, top = 8.dp, bottom = 80.dp),
+                      modifier = Modifier.fillMaxWidth()
+                  ) {
+                      items(filtered, key = { it.key }) { (id, prog) ->
+                          DownloadRow(
+                              downloadId = id,
+                              progress = prog,
+                              onPause = { viewModel.pauseTelegramDownload(id) },
+                              onResume = { viewModel.resumeTelegramDownload(id) },
+                              onCancel = { viewModel.cancelTelegramDownload(id) }
+                          )
+                      }
+                  }
+              }
+          }
+      }
+  }
 
 @Composable
 private fun DownloadRow(
-    downloadId: String,
-    progress: com.usbdiskmanager.ps2.data.download.TgDownloadProgress
-) {
-    val statusColor = when (progress.status) {
-        TgDownloadStatus.DONE -> Color(0xFF4CAF50)
-        TgDownloadStatus.ERROR -> MaterialTheme.colorScheme.error
-        TgDownloadStatus.DOWNLOADING -> Color(0xFF0088CC)
-        TgDownloadStatus.QUEUED -> MaterialTheme.colorScheme.onSurfaceVariant
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    val statusIcon = when (progress.status) {
-        TgDownloadStatus.DONE -> Icons.Default.CheckCircle
-        TgDownloadStatus.ERROR -> Icons.Default.Error
-        TgDownloadStatus.DOWNLOADING -> Icons.Default.Downloading
-        TgDownloadStatus.QUEUED -> Icons.Default.Schedule
-        else -> Icons.Default.HourglassEmpty
-    }
+      downloadId: String,
+      progress: com.usbdiskmanager.ps2.data.download.TgDownloadProgress,
+      onPause: () -> Unit = {},
+      onResume: () -> Unit = {},
+      onCancel: () -> Unit = {}
+  ) {
+      val statusColor = when (progress.status) {
+          TgDownloadStatus.DONE -> Color(0xFF4CAF50)
+          TgDownloadStatus.ERROR -> MaterialTheme.colorScheme.error
+          TgDownloadStatus.DOWNLOADING -> Color(0xFF0088CC)
+          TgDownloadStatus.PAUSED -> MaterialTheme.colorScheme.tertiary
+          TgDownloadStatus.QUEUED -> MaterialTheme.colorScheme.onSurfaceVariant
+          else -> MaterialTheme.colorScheme.onSurfaceVariant
+      }
+      val statusIcon = when (progress.status) {
+          TgDownloadStatus.DONE -> Icons.Default.CheckCircle
+          TgDownloadStatus.ERROR -> Icons.Default.Error
+          TgDownloadStatus.DOWNLOADING -> Icons.Default.Downloading
+          TgDownloadStatus.PAUSED -> Icons.Default.Pause
+          TgDownloadStatus.QUEUED -> Icons.Default.Schedule
+          else -> Icons.Default.HourglassEmpty
+      }
 
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(statusIcon, null, tint = statusColor, modifier = Modifier.size(18.dp))
-                Text(
-                    progress.fileName.ifBlank { downloadId.takeLast(20) },
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                if (progress.status == TgDownloadStatus.DOWNLOADING || progress.status == TgDownloadStatus.QUEUED) {
-                    Text(
-                        progress.speedFormatted,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF0088CC),
-                        fontSize = 10.sp
-                    )
-                }
-            }
+      Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), shape = RoundedCornerShape(12.dp)) {
+          Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+              Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                  Icon(statusIcon, null, tint = statusColor, modifier = Modifier.size(18.dp))
+                  Column(modifier = Modifier.weight(1f)) {
+                      Text(
+                          progress.fileName.ifBlank { downloadId.takeLast(20) },
+                          style = MaterialTheme.typography.bodySmall,
+                          fontWeight = FontWeight.SemiBold,
+                          maxLines = 1,
+                          overflow = TextOverflow.Ellipsis
+                      )
+                      if (progress.status == TgDownloadStatus.DOWNLOADING) {
+                          Text(progress.speedFormatted, style = MaterialTheme.typography.labelSmall, color = Color(0xFF0088CC), fontSize = 10.sp)
+                      }
+                  }
+                  // Action buttons
+                  when (progress.status) {
+                      TgDownloadStatus.DOWNLOADING -> {
+                          IconButton(onClick = onPause, modifier = Modifier.size(32.dp)) {
+                              Icon(Icons.Default.Pause, "Pause", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                          }
+                          IconButton(onClick = onCancel, modifier = Modifier.size(32.dp)) {
+                              Icon(Icons.Default.Close, "Annuler", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error)
+                          }
+                      }
+                      TgDownloadStatus.PAUSED -> {
+                          IconButton(onClick = onResume, modifier = Modifier.size(32.dp)) {
+                              Icon(Icons.Default.PlayArrow, "Reprendre", modifier = Modifier.size(18.dp), tint = Color(0xFF4CAF50))
+                          }
+                          IconButton(onClick = onCancel, modifier = Modifier.size(32.dp)) {
+                              Icon(Icons.Default.Close, "Annuler", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error)
+                          }
+                      }
+                      TgDownloadStatus.ERROR -> {
+                          IconButton(onClick = onResume, modifier = Modifier.size(32.dp)) {
+                              Icon(Icons.Default.Refresh, "Réessayer", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                          }
+                      }
+                      TgDownloadStatus.QUEUED -> {
+                          IconButton(onClick = onCancel, modifier = Modifier.size(32.dp)) {
+                              Icon(Icons.Default.Close, "Annuler", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error)
+                          }
+                      }
+                      else -> {}
+                  }
+              }
 
-            if (progress.status == TgDownloadStatus.DOWNLOADING) {
-                Spacer(Modifier.height(6.dp))
-                LinearProgressIndicator(
-                    progress = { progress.fraction },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp)),
-                    color = Color(0xFF0088CC)
-                )
-                Spacer(Modifier.height(3.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        "%.1f%%".format(progress.fraction * 100),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (progress.etaSeconds > 0) {
-                        val eta = if (progress.etaSeconds > 60)
-                            "${progress.etaSeconds / 60}m ${progress.etaSeconds % 60}s"
-                        else "${progress.etaSeconds}s"
-                        Text("ETA $eta", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-                    }
-                }
-            } else if (progress.status == TgDownloadStatus.ERROR && progress.error != null) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    progress.error,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-}
+              if (progress.status == TgDownloadStatus.DOWNLOADING) {
+                  Spacer(Modifier.height(6.dp))
+                  LinearProgressIndicator(
+                      progress = { progress.fraction },
+                      modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                      color = Color(0xFF0088CC)
+                  )
+                  Spacer(Modifier.height(3.dp))
+                  Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                      Text("%.1f%%".format(progress.fraction * 100), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                      if (progress.etaSeconds > 0) {
+                          val eta = if (progress.etaSeconds > 60) "${progress.etaSeconds / 60}m ${progress.etaSeconds % 60}s" else "${progress.etaSeconds}s"
+                          Text("ETA $eta", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                      }
+                  }
+              } else if (progress.status == TgDownloadStatus.ERROR && progress.error != null) {
+                  Spacer(Modifier.height(4.dp))
+                  Text(progress.error, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, maxLines = 2, overflow = TextOverflow.Ellipsis)
+              }
+          }
+      }
+  }
 
+  
 @Composable
 private fun StoragePermissionPrompt(modifier: Modifier = Modifier, onGrant: () -> Unit) {
     Column(
